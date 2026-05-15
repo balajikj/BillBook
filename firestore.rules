@@ -1,0 +1,134 @@
+rules_version = '2';
+
+// BillEasy Firestore Security Rules.
+//
+// Trust model: every authenticated request carries custom claims
+//   - role: 'super-admin' | 'company-admin' | 'company-user'
+//   - companyId: string | null (null for super admins)
+// set by the `setUserClaims` Cloud Function. Rules NEVER trust client-supplied
+// document fields for authorization decisions; only `request.auth.token.*`.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function role() {
+      return request.auth.token.role;
+    }
+    function isSuperAdmin() {
+      return isSignedIn() && role() == 'super-admin';
+    }
+    function isCompanyAdmin() {
+      return isSignedIn() && role() == 'company-admin';
+    }
+    function isCompanyUser() {
+      return isSignedIn() && role() == 'company-user';
+    }
+    function isTenantMember(cid) {
+      return isSignedIn()
+          && request.auth.token.companyId == cid
+          && (role() == 'company-admin' || role() == 'company-user');
+    }
+    function isTenantAdmin(cid) {
+      return isSignedIn()
+          && request.auth.token.companyId == cid
+          && role() == 'company-admin';
+    }
+
+    // Helper: incoming document MUST contain exactly the gate fields.
+    function hasOnlyGateFields() {
+      return request.resource.data.keys().hasOnly(['name', 'status', 'defaultCurrency', 'createdAt', 'updatedAt'])
+          && request.resource.data.name is string
+          && request.resource.data.status in ['active', 'inactive']
+          && request.resource.data.defaultCurrency is string
+          && request.resource.data.defaultCurrency.size() == 3;
+    }
+
+    // ---------- /companies/{cid} (public-readable gate) ----------
+    // Anyone (even unauthenticated) may READ the gate document — but it only
+    // contains the small set of gate fields (enforced on writes below).
+    // Only super admins may CREATE/UPDATE/DELETE company docs.
+    match /companies/{cid} {
+      allow read: if true;
+      allow create: if isSuperAdmin()
+                    && cid.matches('^[a-z0-9-]{3,32}$')
+                    && hasOnlyGateFields();
+      allow update: if isSuperAdmin() && hasOnlyGateFields();
+      allow delete: if isSuperAdmin();
+
+      // ---------- private tenant config (admin-only read/write within tenant) ----------
+      match /private/{docId} {
+        allow read, write: if isTenantAdmin(cid) || isSuperAdmin();
+      }
+
+      // ---------- /companies/{cid}/users — directory of tenant members ----------
+      // The Cloud Function writes these documents; clients may read within the
+      // tenant. Writes are blocked from clients (only the Admin SDK / Cloud
+      // Function path bypasses rules).
+      match /users/{uid} {
+        allow read: if isTenantMember(cid) || isSuperAdmin();
+        allow write: if false;
+      }
+
+      // ---------- /companies/{cid}/customers ----------
+      match /customers/{customerId} {
+        // Tenant members may read customers (non-admins need it for invoice form).
+        allow read: if isTenantMember(cid);
+        // Only company admins may write.
+        allow create, update, delete: if isTenantAdmin(cid);
+      }
+
+      // ---------- /companies/{cid}/products ----------
+      match /products/{productId} {
+        allow read: if isTenantMember(cid);
+        allow create, update, delete: if isTenantAdmin(cid);
+      }
+
+      // ---------- /companies/{cid}/invoices ----------
+      match /invoices/{invoiceId} {
+        // Both admins and non-admins read.
+        allow read: if isTenantMember(cid);
+
+        // Create: admins and non-admins. The invoice must carry the correct
+        // companyId-bound shape and createdBy must equal the caller.
+        allow create: if isTenantMember(cid)
+                      && request.resource.data.createdBy == request.auth.uid
+                      && request.resource.data.status == 'pending';
+
+        // Update: admins may flip status and any field; non-admins may NOT
+        // change status. This is the critical authorization rule.
+        allow update: if (isTenantAdmin(cid))
+                      || (isCompanyUser()
+                          && request.auth.token.companyId == cid
+                          && request.resource.data.status == resource.data.status);
+
+        // Delete: admins only.
+        allow delete: if isTenantAdmin(cid);
+      }
+
+      // ---------- /companies/{cid}/counters — per-company invoice number sequence ----------
+      match /counters/{counterId} {
+        // Read/write by tenant members (the invoice-create transaction needs to
+        // increment the counter). Without read access, transactional create
+        // can't read the current value.
+        allow read: if isTenantMember(cid);
+        allow write: if isTenantMember(cid);
+      }
+    }
+
+    // ---------- /superAdmins/{uid} — directory of platform super admins ----------
+    // Written by the Cloud Function only; readable by super admins.
+    match /superAdmins/{uid} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
+    // ---------- Deny everything else by default ----------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

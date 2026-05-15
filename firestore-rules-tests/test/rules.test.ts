@@ -1,0 +1,282 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  RulesTestEnvironment,
+  assertFails,
+  assertSucceeds,
+  initializeTestEnvironment
+} from '@firebase/rules-unit-testing';
+import {
+  Timestamp,
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc
+} from 'firebase/firestore';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+
+const PROJECT_ID = 'billeasy-rules-test';
+const COMPANY_A = 'acme-co';
+const COMPANY_B = 'other-co';
+
+let env: RulesTestEnvironment;
+
+beforeAll(async () => {
+  env = await initializeTestEnvironment({
+    projectId: PROJECT_ID,
+    firestore: {
+      rules: readFileSync(resolve(__dirname, '..', '..', 'firestore.rules'), 'utf8'),
+      host: '127.0.0.1',
+      port: 8080
+    }
+  });
+});
+
+afterAll(async () => { await env.cleanup(); });
+
+beforeEach(async () => { await env.clearFirestore(); });
+
+function adminCtx(companyId: string) {
+  return env.authenticatedContext('admin-' + companyId, {
+    role: 'company-admin',
+    companyId
+  });
+}
+function userCtx(companyId: string) {
+  return env.authenticatedContext('user-' + companyId, {
+    role: 'company-user',
+    companyId
+  });
+}
+function superCtx() {
+  return env.authenticatedContext('super-1', { role: 'super-admin' });
+}
+function anonCtx() {
+  return env.unauthenticatedContext();
+}
+
+async function seedCompany(code: string, status: 'active' | 'inactive' = 'active') {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'companies', code), {
+      name: code.toUpperCase(),
+      status,
+      defaultCurrency: 'USD'
+    });
+  });
+}
+
+describe('companies (gate document)', () => {
+  it('allows anonymous read of /companies/{cid}', async () => {
+    await seedCompany(COMPANY_A);
+    const db = anonCtx().firestore();
+    await assertSucceeds(getDoc(doc(db, 'companies', COMPANY_A)));
+  });
+
+  it('denies anonymous list of /companies', async () => {
+    await seedCompany(COMPANY_A);
+    const db = anonCtx().firestore();
+    await assertFails(getDocs(collection(db, 'companies')));
+  });
+
+  it('denies non-super-admin from creating a company', async () => {
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(setDoc(doc(db, 'companies', 'fake-co'), {
+      name: 'Fake', status: 'active', defaultCurrency: 'USD'
+    }));
+  });
+
+  it('allows super-admin to create a company with gate-only fields', async () => {
+    const db = superCtx().firestore();
+    await assertSucceeds(setDoc(doc(db, 'companies', 'newco'), {
+      name: 'NewCo', status: 'active', defaultCurrency: 'USD'
+    }));
+  });
+
+  it('rejects super-admin company create with an invalid code', async () => {
+    const db = superCtx().firestore();
+    await assertFails(setDoc(doc(db, 'companies', 'BAD CODE'), {
+      name: 'Bad', status: 'active', defaultCurrency: 'USD'
+    }));
+  });
+});
+
+describe('customers (per-tenant isolation)', () => {
+  beforeEach(async () => { await seedCompany(COMPANY_A); await seedCompany(COMPANY_B); });
+
+  it('admin in company A can create/read customers in company A', async () => {
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertSucceeds(setDoc(doc(db, `companies/${COMPANY_A}/customers/c1`), { name: 'Customer 1' }));
+    await assertSucceeds(getDoc(doc(db, `companies/${COMPANY_A}/customers/c1`)));
+  });
+
+  it('admin in company A CANNOT read customers in company B', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `companies/${COMPANY_B}/customers/c1`), { name: 'Foreign' });
+    });
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(getDoc(doc(db, `companies/${COMPANY_B}/customers/c1`)));
+  });
+
+  it('non-admin in company A can READ but NOT write customers', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `companies/${COMPANY_A}/customers/c1`), { name: 'Customer 1' });
+    });
+    const db = userCtx(COMPANY_A).firestore();
+    await assertSucceeds(getDoc(doc(db, `companies/${COMPANY_A}/customers/c1`)));
+    await assertFails(setDoc(doc(db, `companies/${COMPANY_A}/customers/c2`), { name: 'Forbidden' }));
+  });
+
+  it('unauthenticated client CANNOT read any customer', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `companies/${COMPANY_A}/customers/c1`), { name: 'Customer 1' });
+    });
+    const db = anonCtx().firestore();
+    await assertFails(getDoc(doc(db, `companies/${COMPANY_A}/customers/c1`)));
+  });
+
+  it('admin can write a customer with India-specific fields (GSTIN, shopName, fullAddress, phoneNumber)', async () => {
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertSucceeds(setDoc(doc(db, `companies/${COMPANY_A}/customers/c-india`), {
+      name: 'Globex Traders',
+      phoneNumber: '+91 9876543210',
+      shopName: 'Globex Mart',
+      fullAddress: '12 MG Road, Bengaluru 560001',
+      gstNumber: '29ABCDE1234F1Z5'
+    }));
+  });
+
+  it('admin in company A CANNOT read company B customer with India fields populated', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `companies/${COMPANY_B}/customers/c-india`), {
+        name: 'Foreign', shopName: 'Foreign Mart', gstNumber: '07ZZZZZ1234Z1Z5'
+      });
+    });
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(getDoc(doc(db, `companies/${COMPANY_B}/customers/c-india`)));
+  });
+});
+
+describe('products (per-tenant isolation)', () => {
+  beforeEach(async () => { await seedCompany(COMPANY_A); });
+
+  it('admin can write products in their tenant', async () => {
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertSucceeds(setDoc(doc(db, `companies/${COMPANY_A}/products/p1`), {
+      name: 'P1', unitPrice: 10, currency: 'USD'
+    }));
+  });
+
+  it('non-admin CANNOT write products', async () => {
+    const db = userCtx(COMPANY_A).firestore();
+    await assertFails(setDoc(doc(db, `companies/${COMPANY_A}/products/p1`), {
+      name: 'P1', unitPrice: 10, currency: 'USD'
+    }));
+  });
+});
+
+describe('invoices (creation, status guard, cross-tenant)', () => {
+  beforeEach(async () => { await seedCompany(COMPANY_A); await seedCompany(COMPANY_B); });
+
+  it('non-admin can create a pending invoice in their tenant', async () => {
+    const ctx = userCtx(COMPANY_A);
+    const db = ctx.firestore();
+    await assertSucceeds(setDoc(doc(db, `companies/${COMPANY_A}/invoices/i1`), {
+      number: 'INV-2026-0001',
+      customer: { id: 'c1', name: 'C', email: null, address: null },
+      lineItems: [{ productId: null, description: 'x', quantity: 1, unitPrice: 1, lineTotal: 1 }],
+      subtotal: 1, total: 1, currency: 'USD',
+      status: 'pending',
+      issueDate: Timestamp.now(),
+      dueDate: Timestamp.now(),
+      paidAt: null,
+      notes: '',
+      createdBy: ctx.firestore().app.options.appId ? 'user-' + COMPANY_A : 'user-' + COMPANY_A,
+      createdAt: serverTimestamp()
+    }));
+  });
+
+  it('non-admin CANNOT change invoice status (paid)', async () => {
+    await env.withSecurityRulesDisabled(async (sctx) => {
+      await setDoc(doc(sctx.firestore(), `companies/${COMPANY_A}/invoices/i2`), {
+        number: 'INV-2026-0002',
+        customer: { id: 'c1', name: 'C', email: null, address: null },
+        lineItems: [],
+        subtotal: 0, total: 0, currency: 'USD',
+        status: 'pending',
+        issueDate: Timestamp.now(),
+        dueDate: Timestamp.now(),
+        paidAt: null,
+        notes: '',
+        createdBy: 'user-' + COMPANY_A
+      });
+    });
+    const db = userCtx(COMPANY_A).firestore();
+    await assertFails(updateDoc(doc(db, `companies/${COMPANY_A}/invoices/i2`), { status: 'paid' }));
+  });
+
+  it('admin CAN change invoice status', async () => {
+    await env.withSecurityRulesDisabled(async (sctx) => {
+      await setDoc(doc(sctx.firestore(), `companies/${COMPANY_A}/invoices/i3`), {
+        number: 'INV-2026-0003',
+        customer: { id: 'c1', name: 'C', email: null, address: null },
+        lineItems: [],
+        subtotal: 0, total: 0, currency: 'USD',
+        status: 'pending',
+        issueDate: Timestamp.now(),
+        dueDate: Timestamp.now(),
+        paidAt: null,
+        notes: '',
+        createdBy: 'user-' + COMPANY_A
+      });
+    });
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertSucceeds(updateDoc(doc(db, `companies/${COMPANY_A}/invoices/i3`), { status: 'paid' }));
+  });
+
+  it('cross-tenant invoice access is denied', async () => {
+    await env.withSecurityRulesDisabled(async (sctx) => {
+      await setDoc(doc(sctx.firestore(), `companies/${COMPANY_B}/invoices/i1`), {
+        number: 'X', status: 'pending', total: 1, currency: 'USD'
+      });
+    });
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(getDoc(doc(db, `companies/${COMPANY_B}/invoices/i1`)));
+  });
+
+  it('super-admin CANNOT read tenant invoices (platform-only role)', async () => {
+    await env.withSecurityRulesDisabled(async (sctx) => {
+      await setDoc(doc(sctx.firestore(), `companies/${COMPANY_A}/invoices/i1`), {
+        number: 'X', status: 'pending', total: 1, currency: 'USD'
+      });
+    });
+    const db = superCtx().firestore();
+    await assertFails(getDoc(doc(db, `companies/${COMPANY_A}/invoices/i1`)));
+  });
+});
+
+describe('users directory & counters', () => {
+  beforeEach(async () => { await seedCompany(COMPANY_A); });
+
+  it('clients CANNOT directly write a user-directory entry (Cloud Function only)', async () => {
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(setDoc(doc(db, `companies/${COMPANY_A}/users/some-uid`), {
+      uid: 'some-uid', email: 'x@y.z', displayName: 'X', role: 'company-user'
+    }));
+  });
+
+  it('tenant member can read invoice counter (needed for transactional create)', async () => {
+    await env.withSecurityRulesDisabled(async (sctx) => {
+      await setDoc(doc(sctx.firestore(), `companies/${COMPANY_A}/counters/invoice`), {
+        year: 2026, next: 1
+      });
+    });
+    const db = userCtx(COMPANY_A).firestore();
+    await assertSucceeds(getDoc(doc(db, `companies/${COMPANY_A}/counters/invoice`)));
+  });
+});

@@ -1,0 +1,49 @@
+{
+  "name": "billeasy",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "npm@10.9.2",
+  "scripts": {
+    "ng": "ng",
+    "start": "concurrently -k -n NG,EMU -c blue,magenta \"ng serve\" \"npm run emulators\"",
+    "serve": "ng serve",
+    "build": "ng build",
+    "watch": "ng build --watch --configuration development",
+    "test": "ng test",
+    "emulators": "firebase emulators:start --only auth,firestore,hosting",
+    "emulators:exec": "firebase emulators:exec --only auth,firestore",
+    "test:rules": "firebase emulators:exec --only firestore \"npm --prefix firestore-rules-tests test\"",
+    "test:functions": "npm --prefix functions test",
+    "build:functions": "npm --prefix functions run build",
+    "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes",
+    "deploy:functions": "npm --prefix functions run build && firebase deploy --only functions",
+    "deploy:hosting": "npm run build && firebase deploy --only hosting",
+    "deploy": "npm run test:rules && npm run deploy:rules && npm run deploy:hosting"
+  },
+  "dependencies": {
+    "@angular/common": "^21.2.0",
+    "@angular/compiler": "^21.2.0",
+    "@angular/core": "^21.2.0",
+    "@angular/fire": "21.0.0-rc.0",
+    "@angular/forms": "^21.2.0",
+    "@angular/platform-browser": "^21.2.0",
+    "@angular/router": "^21.2.0",
+    "firebase": "^12.13.0",
+    "pdfmake": "^0.2.10",
+    "rxjs": "~7.8.0",
+    "tslib": "^2.3.0"
+  },
+  "devDependencies": {
+    "@angular/build": "^21.2.11",
+    "@angular/cli": "^21.2.11",
+    "@angular/compiler-cli": "^21.2.0",
+    "@types/pdfmake": "^0.2.9",
+    "concurrently": "^9.0.0",
+    "firebase-admin": "^13.9.0",
+    "firebase-tools": "^14.0.0",
+    "jsdom": "^28.0.0",
+    "prettier": "^3.8.1",
+    "typescript": "~5.9.2",
+    "vitest": "^4.0.8"
+  }
+}

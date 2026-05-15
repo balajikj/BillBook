@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(openspec new *)",
+      "Bash(openspec instructions *)",
+      "Bash(npm --version)",
+      "Bash(npx -y @angular/cli@latest version)",
+      "Bash(npx openspec *)",
+      "Bash(npx vitest *)",
+      "Bash(npx ng *)"
+    ]
+  }
+}
