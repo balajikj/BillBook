@@ -343,8 +343,6 @@ export class InvoiceFormComponent {
   }
 
   private defaultDueDate(): string {
-    const d = new Date();
-    d.setDate(d.getDate() + 14);
-    return d.toISOString().slice(0, 10);
+    return new Date().toISOString().slice(0, 10);
   }
 }

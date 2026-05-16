@@ -8,10 +8,13 @@ import { numberToWords } from '../utils/number-to-words';
 // badges (standard Indian GST convention) at the top-right of each copy.
 const SHOW_COPY_LABELS = false;
 
-// Landscape A4 measured in pdfmake points (1pt = 1/72").
+// Portrait A4, measured in pdfmake points (1pt = 1/72").
 const PAGE_MARGIN_X = 24;
-const PAGE_WIDTH = 842;
-const SEPARATOR_LINE_WIDTH = PAGE_WIDTH - 2 * PAGE_MARGIN_X; // 794pt
+const PAGE_MARGIN_Y = 18;
+// Space reserved between the two copies — the vertical separator line sits in
+// the middle of this gap (drawn via pageBackground, not via a content column,
+// so it doesn't consume vertical content space).
+const COLUMN_GAP = 20;
 
 @Injectable({ providedIn: 'root' })
 export class PdfService {
@@ -42,8 +45,8 @@ function fmtCurrency(value: number, currency: string): string {
 
 /**
  * Returns the pdfmake content array for ONE copy of the invoice. The caller
- * stacks two of these on a single landscape page with a dashed cut-line
- * separator between them — see `buildInvoiceDocDefinition`.
+ * places two of these side-by-side inside a top-level `columns` element with
+ * a vertical dashed separator between them — see `buildInvoiceDocDefinition`.
  */
 function buildInvoiceCopy(
   invoice: Invoice,
@@ -56,17 +59,10 @@ function buildInvoiceCopy(
   const india = hasIndiaTotals(invoice);
   const hasHsnColumn = invoice.lineItems.some((li) => !!li.hsnSac);
 
-  // ----- Bill-to block -----
-  const billTo: any[] = [{ text: 'Bill to:', bold: true, margin: [0, 4, 0, 1] as [number, number, number, number] }];
-  billTo.push({ text: invoice.customer.name, bold: true });
-  if (invoice.customer.shopName) billTo.push(invoice.customer.shopName);
-  if (invoice.customer.fullAddress) billTo.push(invoice.customer.fullAddress);
-  else if (invoice.customer.address) billTo.push(invoice.customer.address);
-  if (invoice.customer.gstNumber) billTo.push(`GSTIN: ${invoice.customer.gstNumber}`);
-  if (invoice.customer.phoneNumber) billTo.push(`Phone: ${invoice.customer.phoneNumber}`);
-  if (invoice.customer.email) billTo.push(invoice.customer.email);
+  // ----- Line items table widths (tuned for a ~268pt-wide copy column) -----
+  const tableWidths: any[] = hasHsnColumn ? ['*', 40, 22, 50, 60] : ['*', 22, 50, 60];
 
-  // ----- Line items table -----
+  // ----- Line items table header + body -----
   const headerRow: any[] = [{ text: 'Description', bold: true }];
   if (hasHsnColumn) headerRow.push({ text: 'HSN/SAC', bold: true });
   headerRow.push({ text: 'Qty', bold: true }, { text: 'Unit', bold: true }, { text: 'Line total', bold: true });
@@ -81,8 +77,6 @@ function buildInvoiceCopy(
     );
     return row;
   });
-
-  const tableWidths: any[] = hasHsnColumn ? ['*', 60, 36, 70, 80] : ['*', 36, 70, 80];
 
   // ----- Totals block -----
   const totalsBody: any[][] = [];
@@ -141,16 +135,22 @@ function buildInvoiceCopy(
 
   content.push({ text: company.name, style: 'companyHeader' });
   content.push({ text: `Invoice ${invoice.number}`, style: 'invoiceHeader' });
-  content.push({
-    columns: [
-      billTo,
-      [
-        { text: `Invoice date: ${issue}`, alignment: 'right' },
-        { text: `Due date: ${due}`, alignment: 'right' },
-        { text: `Status: ${displayStatus}`, alignment: 'right', bold: true, margin: [0, 2, 0, 0] }
-      ]
-    ]
-  });
+
+  // Bill-to + dates as a single vertical stack (each copy is too narrow to
+  // split into two sub-columns — see design Decision 4).
+  content.push({ text: 'Bill to:', bold: true, margin: [0, 4, 0, 1] });
+  content.push({ text: invoice.customer.name, bold: true });
+  if (invoice.customer.shopName) content.push({ text: invoice.customer.shopName });
+  if (invoice.customer.fullAddress) content.push({ text: invoice.customer.fullAddress });
+  else if (invoice.customer.address) content.push({ text: invoice.customer.address });
+  if (invoice.customer.gstNumber) content.push({ text: `GSTIN: ${invoice.customer.gstNumber}` });
+  if (invoice.customer.phoneNumber) content.push({ text: `Phone: ${invoice.customer.phoneNumber}` });
+  if (invoice.customer.email) content.push({ text: invoice.customer.email });
+
+  content.push({ text: `Invoice date: ${issue}`, margin: [0, 4, 0, 0] });
+  content.push({ text: `Due date: ${due}` });
+  content.push({ text: `Status: ${displayStatus}`, alignment: 'right', bold: true, margin: [0, 2, 0, 0] });
+
   content.push({
     margin: [0, 6, 0, 0],
     table: { headerRows: 1, widths: tableWidths, body: [headerRow, ...rows] }
@@ -160,7 +160,7 @@ function buildInvoiceCopy(
     columns: [
       { text: '' },
       {
-        width: 240,
+        width: 200,
         table: { widths: ['*', 'auto'], body: totalsBody },
         layout: 'lightHorizontalLines'
       }
@@ -183,45 +183,37 @@ function buildInvoiceCopy(
   return content;
 }
 
-/** Returns the dashed-cut-line separator block placed between the two copies. */
-function separator(): any {
-  return {
-    margin: [0, 6, 0, 6],
-    stack: [
-      {
-        canvas: [
-          {
-            type: 'line',
-            x1: 0,
-            y1: 0,
-            x2: SEPARATOR_LINE_WIDTH,
-            y2: 0,
-            lineWidth: 0.5,
-            lineColor: '#888',
-            dash: { length: 4, space: 3 }
-          }
-        ]
-      },
-      {
-        text: '✂ Cut along the dashed line',
-        alignment: 'center',
-        fontSize: 7,
-        color: '#888',
-        margin: [0, 2, 0, 0]
-      }
-    ]
-  };
-}
-
 function buildInvoiceDocDefinition(invoice: Invoice, company: Pick<Company, 'name' | 'defaultCurrency'>): TDocumentDefinitions {
   return {
     pageOrientation: 'landscape',
     pageSize: 'A4',
-    pageMargins: [PAGE_MARGIN_X, 18, PAGE_MARGIN_X, 18],
+    pageMargins: [PAGE_MARGIN_X, PAGE_MARGIN_Y, PAGE_MARGIN_X, PAGE_MARGIN_Y],
+    // Vertical dashed cut line drawn on the page background, NOT in the content
+    // flow. Drawing it as a content element (with a tall canvas) forces pdfmake
+    // to allocate ~806pt of vertical space for it, which overflows the page.
+    // pageBackground sits behind content and is not part of the flow.
+    background: (currentPage, pageSize) => ({
+      canvas: [
+        {
+          type: 'line',
+          x1: pageSize.width / 2,
+          y1: PAGE_MARGIN_Y,
+          x2: pageSize.width / 2,
+          y2: pageSize.height - PAGE_MARGIN_Y,
+          lineWidth: 0.5,
+          lineColor: '#888',
+          dash: { length: 4, space: 3 }
+        }
+      ]
+    }),
     content: [
-      ...buildInvoiceCopy(invoice, company, 'ORIGINAL FOR RECIPIENT'),
-      separator(),
-      ...buildInvoiceCopy(invoice, company, 'DUPLICATE FOR SUPPLIER')
+      {
+        columns: [
+          { stack: buildInvoiceCopy(invoice, company, 'ORIGINAL FOR RECIPIENT'), width: '*' },
+          { stack: buildInvoiceCopy(invoice, company, 'DUPLICATE FOR SUPPLIER'), width: '*' }
+        ],
+        columnGap: COLUMN_GAP
+      }
     ],
     styles: {
       companyHeader: { fontSize: 13, bold: true },

@@ -140,7 +140,7 @@ describe('PdfService.buildDocDefinition — India invoice without HSN', () => {
   });
 });
 
-describe('PdfService.buildDocDefinition — two-up landscape layout', () => {
+describe('PdfService.buildDocDefinition — two-up landscape side-by-side', () => {
   describe('page geometry', () => {
     const def = svc.buildDocDefinition(indiaInvoice(), company);
     it('uses landscape orientation', () => {
@@ -169,6 +169,25 @@ describe('PdfService.buildDocDefinition — two-up landscape layout', () => {
     it('footer is 7pt grey', () => {
       expect((def.styles as any)?.footer?.fontSize).toBe(7);
       expect((def.styles as any)?.footer?.color).toBe('#888');
+    });
+  });
+
+  describe('top-level columns layout', () => {
+    const def = svc.buildDocDefinition(indiaInvoice(), company);
+    const top = (def.content as any[])[0];
+
+    it('content[0] is a columns container', () => {
+      expect(Array.isArray(top.columns)).toBe(true);
+    });
+    it('columns has exactly 2 entries (left copy, right copy)', () => {
+      expect(top.columns.length).toBe(2);
+    });
+    it('both copy columns have width "*" (split evenly)', () => {
+      expect(top.columns[0].width).toBe('*');
+      expect(top.columns[1].width).toBe('*');
+    });
+    it('columnGap is set so the page-background line has visual breathing room', () => {
+      expect(top.columnGap).toBeGreaterThan(0);
     });
   });
 
@@ -203,30 +222,47 @@ describe('PdfService.buildDocDefinition — two-up landscape layout', () => {
     it('invoice number appears exactly twice', () => {
       expect(countOccurrences(json, 'Invoice INV-2026-0001')).toBe(2);
     });
-    it('Total label appears exactly twice', () => {
-      // "Total" is a substring of "Line total", which appears in the header row of
-      // each copy's line items table. Match the standalone totals row label.
-      const totalsRowMatches = countOccurrences(json, '"Total"');
-      // pdfmake serialises the bold totals cell as { text: 'Total', bold: true } —
-      // its JSON form contains "text":"Total". Use that as a less-ambiguous marker.
-      const totalsByTextProp = countOccurrences(json, '"text":"Total"');
-      expect(Math.max(totalsRowMatches, totalsByTextProp)).toBeGreaterThanOrEqual(2);
+    it('Total label appears at least twice (legacy totals layout)', () => {
+      // The bold "Total" cell serialises as { text: 'Total', bold: true }.
+      expect(countOccurrences(json, '"text":"Total"')).toBeGreaterThanOrEqual(2);
     });
     it('Subtotal row appears exactly twice', () => {
       expect(countOccurrences(json, '"Subtotal"')).toBe(2);
     });
   });
 
-  describe('separator', () => {
-    const def = svc.buildDocDefinition(indiaInvoice(), company);
-    const json = stringify(def.content);
+  describe('vertical separator (page background)', () => {
+    const def = svc.buildDocDefinition(indiaInvoice(), company) as any;
+    // pdfmake A4 landscape page is 842 × 595pt.
+    const fakePageSize = { width: 842, height: 595 };
+    const bg = typeof def.background === 'function' ? def.background(1, fakePageSize) : def.background;
+    const sepCanvas = bg.canvas[0];
+    const contentJson = stringify(def.content);
 
-    it('renders the cut-line label exactly once between the two copies', () => {
-      expect(countOccurrences(json, 'Cut along the dashed line')).toBe(1);
+    it('separator is drawn via pageBackground, not via content flow', () => {
+      // Critical for avoiding spillover onto page 2: a tall canvas inside
+      // `content` forces pdfmake to allocate vertical space for it.
+      expect(typeof def.background).toBe('function');
     });
-    it('uses a dashed line at 794pt width (page width minus margins)', () => {
-      expect(json).toContain('"x2":794');
-      expect(json).toContain('"dash"');
+    it('separator is a vertical line (x1 === x2)', () => {
+      expect(sepCanvas.x1).toBe(sepCanvas.x2);
+    });
+    it('separator sits at the horizontal centre of the landscape page', () => {
+      expect(sepCanvas.x1).toBe(421);
+    });
+    it('separator spans the full page content height', () => {
+      expect(sepCanvas.y1).toBe(18);
+      expect(sepCanvas.y2).toBe(595 - 18);
+    });
+    it('separator uses dashed stroke', () => {
+      expect(sepCanvas.dash).toEqual({ length: 4, space: 3 });
+    });
+    it('no separator canvas appears in the content array (would force page break)', () => {
+      // The canvas with these specific dash values lives ONLY in the background.
+      expect(contentJson).not.toContain('"dash":{"length":4,"space":3}');
+    });
+    it('no horizontal cut-line text label appears', () => {
+      expect(contentJson).not.toContain('Cut along the dashed line');
     });
   });
 });

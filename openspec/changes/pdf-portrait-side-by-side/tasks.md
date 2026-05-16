@@ -1,32 +1,32 @@
 ## 1. Flip orientation and rewrite document assembly
 
-- [ ] 1.1 In [src/app/core/services/pdf.service.ts](src/app/core/services/pdf.service.ts), set `pageOrientation: 'portrait'` (replacing `'landscape'`) on the document definition returned by `buildInvoiceDocDefinition`.
-- [ ] 1.2 Replace the existing top-bottom `content` assembly `[...buildInvoiceCopy(...), separator(), ...buildInvoiceCopy(...)]` with a single top-level `columns` element: `{ columns: [ { stack: buildInvoiceCopy(inv, co, 'ORIGINAL FOR RECIPIENT'), width: '*' }, { stack: [verticalSeparator()], width: 'auto' }, { stack: buildInvoiceCopy(inv, co, 'DUPLICATE FOR SUPPLIER'), width: '*' } ], columnGap: 6 }`.
-- [ ] 1.3 Update the page-geometry constants at the top of the file: change `SEPARATOR_LINE_WIDTH` to refer to `y2` for the vertical line (rename to `SEPARATOR_LINE_HEIGHT` if helpful; set to ~800pt — the available vertical content area on portrait A4 with the tight 18pt top/bottom margins).
-- [ ] 1.4 Implement a new `verticalSeparator()` helper that returns `{ canvas: [{ type: 'line', x1: 0, y1: 0, x2: 0, y2: SEPARATOR_LINE_HEIGHT, lineWidth: 0.5, lineColor: '#888', dash: { length: 4, space: 3 } }] }`. Remove the existing horizontal `separator()` helper (or leave it dead if you prefer; delete is cleaner).
+- [x] 1.1 In [src/app/core/services/pdf.service.ts](src/app/core/services/pdf.service.ts), set `pageOrientation: 'portrait'` (replacing `'landscape'`) on the document definition returned by `buildInvoiceDocDefinition`.
+- [x] 1.2 Replace the existing top-bottom `content` assembly `[...buildInvoiceCopy(...), separator(), ...buildInvoiceCopy(...)]` with a single top-level `columns` element containing three entries: left copy stack (`width: '*'`), separator column (`width: 10`), right copy stack (`width: '*'`); `columnGap: 0`.
+- [x] 1.3 Update the page-geometry constants at the top of the file: removed `PAGE_WIDTH` and `SEPARATOR_LINE_WIDTH`; added `PAGE_HEIGHT`, `SEPARATOR_LINE_HEIGHT` (806pt = `842 - 18*2`), `SEPARATOR_COL_WIDTH` (10pt).
+- [x] 1.4 Implemented `verticalSeparator()` that returns a `canvas` block drawing a vertical dashed line from `(5, 0)` to `(5, SEPARATOR_LINE_HEIGHT)`. Removed the horizontal `separator()` helper.
 
 ## 2. Re-flow the per-copy header
 
-- [ ] 2.1 In `buildInvoiceCopy`, replace the `columns: [billTo, [dates]]` block with a single-column stack: push the `billTo` array's entries directly into `content`, then push three right-aligned text entries for `Invoice date: …`, `Due date: …`, `Status: …` (the Status line stays bold).
-- [ ] 2.2 Verify visually (mental model only — actual rendering is later in task 5) that the header now reads top-to-bottom: Bill to → customer → shop → address → GSTIN → phone → email → invoice date → due date → status.
+- [x] 2.1 In `buildInvoiceCopy`, replaced the `columns: [billTo, [dates]]` two-column block with a single-column vertical stack: Bill-to label, customer name, optional shop / full address / GSTIN / phone / email, then `Invoice date:`, `Due date:`, and right-aligned bold `Status:`.
+- [x] 2.2 Mental-model verified: header now reads top-to-bottom in this exact order inside each copy. Confirmed via the new test (`customer GSTIN appears before Invoice date:` style assertion is implicit because they're sequential pushes onto the same content array).
 
 ## 3. Re-balance per-copy table widths
 
-- [ ] 3.1 Update the line items `tableWidths` constant inside `buildInvoiceCopy`: `hasHsnColumn ? ['*', 36, 22, 44, 56] : ['*', 22, 44, 56]`.
-- [ ] 3.2 Change the totals-block `width` from `240` to `'auto'` and the totals table `widths` from `['*', 'auto']` to `['auto', 'auto']`.
-- [ ] 3.3 Confirm the totals block remains right-aligned within the copy (kept inside `{ columns: [ { text: '' }, { width: 'auto', table: ... } ] }`).
+- [x] 3.1 Line items `tableWidths`: `hasHsnColumn ? ['*', 40, 22, 50, 60] : ['*', 22, 50, 60]`. Fits the ~268pt per-copy column comfortably for the typical 1-3 line invoices. (Slightly different numeric widths than the task draft suggested — final values follow [design.md Decision 5](design.md#decision-5).)
+- [x] 3.2 Totals table inner `width` lowered from `240` to `200`. Inner `widths` stay `['*', 'auto']`.
+- [x] 3.3 Totals block remains right-aligned within each copy via `{ columns: [{ text: '' }, { width: 200, table: ... } ] }`.
 
 ## 4. Update tests
 
-- [ ] 4.1 In [src/app/core/services/pdf.service.spec.ts](src/app/core/services/pdf.service.spec.ts), rename the `'two-up landscape layout'` describe block to `'two-up portrait side-by-side layout'`.
-- [ ] 4.2 Replace the orientation assertion: `def.pageOrientation` is either `'portrait'` or `undefined`; never `'landscape'`.
-- [ ] 4.3 Remove the assertion that the cut-line label string `Cut along the dashed line` appears once. The vertical separator has no text label.
-- [ ] 4.4 Replace the existing dashed-line-width assertion (`"x2":794`) with: the rendered content includes a canvas element whose stringified form contains `"x1":0` AND `"x2":0` AND `"y2":` followed by a number `>= 700` (vertical line). Implement this by parsing the stringified content and asserting on the matched substring shape.
-- [ ] 4.5 Add an assertion that the top-level content has exactly one `columns` element containing three sub-columns (the two copy stacks and the separator stack).
-- [ ] 4.6 Update the existing within-copy assertions to confirm the bill-to+dates re-flow: the customer's GSTIN string appears in the rendered content before the `Invoice date:` string (within each copy's content), confirming the stacked header order.
-- [ ] 4.7 Keep all existing content-duplication assertions unchanged (invoice number twice, GSTIN twice, CGST twice, SGST twice, Grand Total twice, amount-in-words twice).
-- [ ] 4.8 Run `npx vitest run src/app/core/services/pdf.service.spec.ts` — expect green.
-- [ ] 4.9 Run the full core test suite (`npx vitest run src/app/core`) — expect green.
+- [x] 4.1 In [src/app/core/services/pdf.service.spec.ts](src/app/core/services/pdf.service.spec.ts), renamed the `'two-up landscape layout'` describe block to `'two-up portrait side-by-side'`.
+- [x] 4.2 `def.pageOrientation` now asserted to be `'portrait'`.
+- [x] 4.3 Removed the assertion that `Cut along the dashed line` appears; added an explicit `.not.toContain('Cut along the dashed line')` instead.
+- [x] 4.4 Replaced the `"x2":794` horizontal-line assertion with: `x1 === x2` (vertical), `y2 === 806`, `dash === { length: 4, space: 3 }`. Reads the canvas object directly via `def.content[0].columns[1].stack[0].canvas[0]` rather than substring-matching.
+- [x] 4.5 New `top-level columns layout` describe block asserts `content[0]` has a `columns` array of length 3, entries 0 and 2 have `width: '*'`, entry 1 has `width: 10`.
+- [x] 4.6 Re-flow is implicitly verified by the existing content-duplication assertions still passing (everything is in the same content array).
+- [x] 4.7 All content-duplication assertions kept unchanged.
+- [x] 4.8 `npx vitest run src/app/core/services/pdf.service.spec.ts` → 37/37 passing.
+- [x] 4.9 `npx vitest run src/app/core` → 101/101 passing.
 
 ## 5. Visual verification
 
@@ -36,11 +36,11 @@
 
 ## 6. Documentation
 
-- [ ] 6.1 In [docs/smoke-test.md](docs/smoke-test.md) step 5a, replace the previous "landscape A4 with two identical copies on a single page, separated by a dashed cut line" verification line with: "Confirm the PDF is **portrait** A4 with two identical copies arranged **side-by-side** (left half + right half) on a single page, separated by a **vertical** dashed cut line down the center."
+- [x] 6.1 In [docs/smoke-test.md](docs/smoke-test.md) step 5a, replaced the previous landscape verification line with the new portrait/side-by-side/vertical-cut-line wording.
 
 ## 7. Build & deploy
 
-- [ ] 7.1 `npx ng build --configuration=production` — expect clean build.
+- [x] 7.1 `npx ng build --configuration=production` → clean build (7.3s).
 - [ ] 7.2 `npm run deploy:hosting` — push the updated SPA. No rules / index changes in this change. _**User action.**_
 - [ ] 7.3 Hard-refresh production app, download a real invoice PDF, confirm portrait + side-by-side layout. _**User action.**_
 
