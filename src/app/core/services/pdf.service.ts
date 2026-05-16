@@ -4,6 +4,15 @@ import { Invoice, computeDisplayStatus, getDisplayTotal, hasIndiaTotals } from '
 import { Company } from '../models/company';
 import { numberToWords } from '../utils/number-to-words';
 
+// Flip to true to print `ORIGINAL FOR RECIPIENT` / `DUPLICATE FOR SUPPLIER`
+// badges (standard Indian GST convention) at the top-right of each copy.
+const SHOW_COPY_LABELS = false;
+
+// Landscape A4 measured in pdfmake points (1pt = 1/72").
+const PAGE_MARGIN_X = 24;
+const PAGE_WIDTH = 842;
+const SEPARATOR_LINE_WIDTH = PAGE_WIDTH - 2 * PAGE_MARGIN_X; // 794pt
+
 @Injectable({ providedIn: 'root' })
 export class PdfService {
   /** Generate and trigger download of `<invoice.number>.pdf`. */
@@ -27,12 +36,20 @@ function fmtCurrency(value: number, currency: string): string {
   try {
     return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(value);
   } catch {
-    // Some currencies aren't supported by every runtime — fall back to plain digits.
     return `${value.toFixed(2)} ${currency}`;
   }
 }
 
-function buildInvoiceDocDefinition(invoice: Invoice, company: Pick<Company, 'name' | 'defaultCurrency'>): TDocumentDefinitions {
+/**
+ * Returns the pdfmake content array for ONE copy of the invoice. The caller
+ * stacks two of these on a single landscape page with a dashed cut-line
+ * separator between them — see `buildInvoiceDocDefinition`.
+ */
+function buildInvoiceCopy(
+  invoice: Invoice,
+  company: Pick<Company, 'name' | 'defaultCurrency'>,
+  copyLabel?: string
+): any[] {
   const displayStatus = computeDisplayStatus(invoice).toUpperCase();
   const issue = invoice.issueDate.toDate().toISOString().slice(0, 10);
   const due = invoice.dueDate.toDate().toISOString().slice(0, 10);
@@ -40,7 +57,7 @@ function buildInvoiceDocDefinition(invoice: Invoice, company: Pick<Company, 'nam
   const hasHsnColumn = invoice.lineItems.some((li) => !!li.hsnSac);
 
   // ----- Bill-to block -----
-  const billTo: any[] = [{ text: 'Bill to:', bold: true, margin: [0, 8, 0, 2] as [number, number, number, number] }];
+  const billTo: any[] = [{ text: 'Bill to:', bold: true, margin: [0, 4, 0, 1] as [number, number, number, number] }];
   billTo.push({ text: invoice.customer.name, bold: true });
   if (invoice.customer.shopName) billTo.push(invoice.customer.shopName);
   if (invoice.customer.fullAddress) billTo.push(invoice.customer.fullAddress);
@@ -65,7 +82,7 @@ function buildInvoiceDocDefinition(invoice: Invoice, company: Pick<Company, 'nam
     return row;
   });
 
-  const tableWidths: any[] = hasHsnColumn ? ['*', 60, 40, 70, 80] : ['*', 40, 70, 80];
+  const tableWidths: any[] = hasHsnColumn ? ['*', 60, 36, 70, 80] : ['*', 36, 70, 80];
 
   // ----- Totals block -----
   const totalsBody: any[][] = [];
@@ -107,60 +124,110 @@ function buildInvoiceDocDefinition(invoice: Invoice, company: Pick<Company, 'nam
   }
 
   // ----- Amount-in-words footer -----
-  const amountInWords = india
-    ? numberToWords(getDisplayTotal(invoice), invoice.currency)
-    : '';
+  const amountInWords = india ? numberToWords(getDisplayTotal(invoice), invoice.currency) : '';
 
-  const content: any[] = [
-    { text: company.name, style: 'companyHeader' },
-    { text: `Invoice ${invoice.number}`, style: 'invoiceHeader' },
-    {
-      columns: [
-        billTo,
-        [
-          { text: `Invoice date: ${issue}`, alignment: 'right' },
-          { text: `Due date: ${due}`, alignment: 'right' },
-          { text: `Status: ${displayStatus}`, alignment: 'right', bold: true, margin: [0, 4, 0, 0] }
-        ]
+  const content: any[] = [];
+
+  // Optional copy label badge at top-right.
+  if (SHOW_COPY_LABELS && copyLabel) {
+    content.push({
+      text: copyLabel,
+      alignment: 'right',
+      fontSize: 7,
+      color: '#666',
+      margin: [0, 0, 0, 2]
+    });
+  }
+
+  content.push({ text: company.name, style: 'companyHeader' });
+  content.push({ text: `Invoice ${invoice.number}`, style: 'invoiceHeader' });
+  content.push({
+    columns: [
+      billTo,
+      [
+        { text: `Invoice date: ${issue}`, alignment: 'right' },
+        { text: `Due date: ${due}`, alignment: 'right' },
+        { text: `Status: ${displayStatus}`, alignment: 'right', bold: true, margin: [0, 2, 0, 0] }
       ]
-    },
-    {
-      margin: [0, 16, 0, 0],
-      table: { headerRows: 1, widths: tableWidths, body: [headerRow, ...rows] }
-    },
-    {
-      margin: [0, 10, 0, 0],
-      columns: [
-        { text: '' },
-        {
-          width: 240,
-          table: { widths: ['*', 'auto'], body: totalsBody },
-          layout: 'lightHorizontalLines'
-        }
-      ]
-    }
-  ];
+    ]
+  });
+  content.push({
+    margin: [0, 6, 0, 0],
+    table: { headerRows: 1, widths: tableWidths, body: [headerRow, ...rows] }
+  });
+  content.push({
+    margin: [0, 4, 0, 0],
+    columns: [
+      { text: '' },
+      {
+        width: 240,
+        table: { widths: ['*', 'auto'], body: totalsBody },
+        layout: 'lightHorizontalLines'
+      }
+    ]
+  });
 
   if (amountInWords) {
     content.push({
-      margin: [0, 8, 0, 0],
+      margin: [0, 4, 0, 0],
       text: [{ text: 'Amount in words: ', bold: true }, amountInWords],
       italics: true
     });
   }
 
   if (invoice.notes) {
-    content.push({ text: invoice.notes, margin: [0, 16, 0, 0], italics: true });
+    content.push({ text: invoice.notes, margin: [0, 6, 0, 0], italics: true });
   }
   content.push({ text: `Generated ${new Date().toISOString()}`, style: 'footer' });
 
+  return content;
+}
+
+/** Returns the dashed-cut-line separator block placed between the two copies. */
+function separator(): any {
   return {
-    content,
+    margin: [0, 6, 0, 6],
+    stack: [
+      {
+        canvas: [
+          {
+            type: 'line',
+            x1: 0,
+            y1: 0,
+            x2: SEPARATOR_LINE_WIDTH,
+            y2: 0,
+            lineWidth: 0.5,
+            lineColor: '#888',
+            dash: { length: 4, space: 3 }
+          }
+        ]
+      },
+      {
+        text: '✂ Cut along the dashed line',
+        alignment: 'center',
+        fontSize: 7,
+        color: '#888',
+        margin: [0, 2, 0, 0]
+      }
+    ]
+  };
+}
+
+function buildInvoiceDocDefinition(invoice: Invoice, company: Pick<Company, 'name' | 'defaultCurrency'>): TDocumentDefinitions {
+  return {
+    pageOrientation: 'landscape',
+    pageSize: 'A4',
+    pageMargins: [PAGE_MARGIN_X, 18, PAGE_MARGIN_X, 18],
+    content: [
+      ...buildInvoiceCopy(invoice, company, 'ORIGINAL FOR RECIPIENT'),
+      separator(),
+      ...buildInvoiceCopy(invoice, company, 'DUPLICATE FOR SUPPLIER')
+    ],
     styles: {
-      companyHeader: { fontSize: 16, bold: true },
-      invoiceHeader: { fontSize: 14, margin: [0, 8, 0, 0] },
-      footer: { fontSize: 8, color: '#888', margin: [0, 24, 0, 0] }
+      companyHeader: { fontSize: 13, bold: true },
+      invoiceHeader: { fontSize: 11, margin: [0, 4, 0, 0] },
+      footer: { fontSize: 7, color: '#888', margin: [0, 4, 0, 0] }
     },
-    defaultStyle: { fontSize: 10 }
+    defaultStyle: { fontSize: 8 }
   };
 }

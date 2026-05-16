@@ -48,10 +48,11 @@ service-account.json
 service-account-*.json
 *-service-account.json
 
-# Firebase CLI debug logs
+# Firebase CLI debug logs and deploy cache
 firebase-debug.log
 firestore-debug.log
 ui-debug.log
+.firebase/
 
 # Legacy one-off bootstrap script (superseded by admin-ops.mjs bootstrap-super-admin)
 # See docs/bootstrap-super-admin.md.

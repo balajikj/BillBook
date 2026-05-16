@@ -62,7 +62,8 @@ In a browser:
    - Verify the **Grand Total** panel reads ₹1227 and the **Amount in words** shows "Rupees One Thousand Two Hundred Twenty Seven Only.".
    - Save. On the detail page, confirm the totals card shows Subtotal / CGST / SGST / Other Charges / Round Off / Grand Total and the amount in words.
    - Click **Download PDF**. Open the PDF and verify: the Bill-to block has shop name + full address + GSTIN + phone; the line items table includes the HSN/SAC column with `6109`; the totals block shows CGST 9% / SGST 9% / Other Charges / Round Off / Grand Total; the "Amount in words" footer appears.
-   - Go back to the older invoice from step 4 (legacy, no GST) — confirm its detail page still shows a single Subtotal/Total line and its PDF still uses the legacy layout (no CGST/SGST/Amount-in-words).
+   - **Layout (added by `pdf-two-copies-landscape`)**: confirm the PDF is landscape A4 with two identical copies of the invoice on a single page — first copy on top, second on bottom — separated by a dashed line labelled `✂ Cut along the dashed line`. Body text is 8pt; all amounts/dates/numbers match the on-screen detail view exactly. The PDF must be a single page (no overflow onto a second page).
+   - Go back to the older invoice from step 4 (legacy, no GST) — confirm its detail page still shows a single Subtotal/Total line, and its PDF also uses the new landscape two-up layout (two copies, dashed cut line) but with the legacy Subtotal/Total block (no CGST/SGST/Amount-in-words) inside each copy.
 
 6. **Tenant isolation check** (optional):
    - Super admin creates a second company `other-co` with admin `eve@local.test`.

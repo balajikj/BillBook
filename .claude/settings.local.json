@@ -7,7 +7,8 @@
       "Bash(npx -y @angular/cli@latest version)",
       "Bash(npx openspec *)",
       "Bash(npx vitest *)",
-      "Bash(npx ng *)"
+      "Bash(npx ng *)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue | Select-Object -First 3 LocalPort, OwningProcess, State | ForEach-Object { $_; \\(Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue | Select-Object Id, ProcessName\\) })"
     ]
   }
 }

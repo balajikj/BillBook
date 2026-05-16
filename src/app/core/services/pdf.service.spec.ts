@@ -69,6 +69,14 @@ function stringify(content: unknown): string {
   return JSON.stringify(content);
 }
 
+function countOccurrences(haystack: string, needle: string): number {
+  if (!needle) return 0;
+  // Escape regex metacharacters so we can match literal substrings.
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const matches = haystack.match(new RegExp(escaped, 'g'));
+  return matches ? matches.length : 0;
+}
+
 describe('PdfService.buildDocDefinition — legacy invoice', () => {
   const def = svc.buildDocDefinition(legacyInvoice(), company);
   const json = stringify(def.content);
@@ -129,5 +137,96 @@ describe('PdfService.buildDocDefinition — India invoice without HSN', () => {
 
   it('omits the HSN/SAC column when no line carries one', () => {
     expect(json).not.toContain('"HSN/SAC"');
+  });
+});
+
+describe('PdfService.buildDocDefinition — two-up landscape layout', () => {
+  describe('page geometry', () => {
+    const def = svc.buildDocDefinition(indiaInvoice(), company);
+    it('uses landscape orientation', () => {
+      expect(def.pageOrientation).toBe('landscape');
+    });
+    it('uses A4 page size', () => {
+      expect(def.pageSize).toBe('A4');
+    });
+    it('uses tight margins [24, 18, 24, 18]', () => {
+      expect(def.pageMargins).toEqual([24, 18, 24, 18]);
+    });
+  });
+
+  describe('typography', () => {
+    const def = svc.buildDocDefinition(indiaInvoice(), company);
+    it('defaultStyle.fontSize is 8', () => {
+      expect((def.defaultStyle as any)?.fontSize).toBe(8);
+    });
+    it('companyHeader is 13pt bold', () => {
+      expect((def.styles as any)?.companyHeader?.fontSize).toBe(13);
+      expect((def.styles as any)?.companyHeader?.bold).toBe(true);
+    });
+    it('invoiceHeader is 11pt', () => {
+      expect((def.styles as any)?.invoiceHeader?.fontSize).toBe(11);
+    });
+    it('footer is 7pt grey', () => {
+      expect((def.styles as any)?.footer?.fontSize).toBe(7);
+      expect((def.styles as any)?.footer?.color).toBe('#888');
+    });
+  });
+
+  describe('content duplication — India invoice', () => {
+    const def = svc.buildDocDefinition(indiaInvoice(), company);
+    const json = stringify(def.content);
+
+    it('invoice number appears exactly twice (one per copy)', () => {
+      expect(countOccurrences(json, 'Invoice INV-2026-0002')).toBe(2);
+    });
+    it('customer GSTIN appears exactly twice', () => {
+      expect(countOccurrences(json, 'GSTIN: 29ABCDE1234F1Z5')).toBe(2);
+    });
+    it('CGST row appears exactly twice', () => {
+      expect(countOccurrences(json, 'CGST (9%)')).toBe(2);
+    });
+    it('SGST row appears exactly twice', () => {
+      expect(countOccurrences(json, 'SGST (9%)')).toBe(2);
+    });
+    it('Grand Total row appears exactly twice', () => {
+      expect(countOccurrences(json, 'Grand Total')).toBe(2);
+    });
+    it('amount-in-words footer appears exactly twice', () => {
+      expect(countOccurrences(json, 'Rupees One Thousand Two Hundred Thirty Only.')).toBe(2);
+    });
+  });
+
+  describe('content duplication — legacy invoice', () => {
+    const def = svc.buildDocDefinition(legacyInvoice(), company);
+    const json = stringify(def.content);
+
+    it('invoice number appears exactly twice', () => {
+      expect(countOccurrences(json, 'Invoice INV-2026-0001')).toBe(2);
+    });
+    it('Total label appears exactly twice', () => {
+      // "Total" is a substring of "Line total", which appears in the header row of
+      // each copy's line items table. Match the standalone totals row label.
+      const totalsRowMatches = countOccurrences(json, '"Total"');
+      // pdfmake serialises the bold totals cell as { text: 'Total', bold: true } —
+      // its JSON form contains "text":"Total". Use that as a less-ambiguous marker.
+      const totalsByTextProp = countOccurrences(json, '"text":"Total"');
+      expect(Math.max(totalsRowMatches, totalsByTextProp)).toBeGreaterThanOrEqual(2);
+    });
+    it('Subtotal row appears exactly twice', () => {
+      expect(countOccurrences(json, '"Subtotal"')).toBe(2);
+    });
+  });
+
+  describe('separator', () => {
+    const def = svc.buildDocDefinition(indiaInvoice(), company);
+    const json = stringify(def.content);
+
+    it('renders the cut-line label exactly once between the two copies', () => {
+      expect(countOccurrences(json, 'Cut along the dashed line')).toBe(1);
+    });
+    it('uses a dashed line at 794pt width (page width minus margins)', () => {
+      expect(json).toContain('"x2":794');
+      expect(json).toContain('"dash"');
+    });
   });
 });
