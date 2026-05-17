@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
 import { Invoice, computeDisplayStatus, getDisplayTotal, hasIndiaTotals } from '../models/invoice';
 import { Company } from '../models/company';
+import { InvoiceTemplate } from '../models/invoice-template';
 import { numberToWords } from '../utils/number-to-words';
 
 // Flip to true to print `ORIGINAL FOR RECIPIENT` / `DUPLICATE FOR SUPPLIER`
@@ -18,20 +19,33 @@ const COLUMN_GAP = 20;
 
 @Injectable({ providedIn: 'root' })
 export class PdfService {
-  /** Generate and trigger download of `<invoice.number>.pdf`. */
-  async generateInvoicePdf(invoice: Invoice, company: Pick<Company, 'name' | 'defaultCurrency'>): Promise<void> {
+  /**
+   * Generate and trigger download of `<invoice.number>.pdf`. The `template`
+   * argument carries the company's invoice profile (header/footer/signature/
+   * disclaimer). Pass `null` (the default) to render the prior layout with no
+   * new bands — used for tenants that have never saved a profile.
+   */
+  async generateInvoicePdf(
+    invoice: Invoice,
+    company: Pick<Company, 'name' | 'defaultCurrency'>,
+    template: InvoiceTemplate | null = null
+  ): Promise<void> {
     // Dynamic import keeps pdfmake out of the initial bundle.
     const pdfMake = (await import('pdfmake/build/pdfmake')).default ?? (await import('pdfmake/build/pdfmake'));
     const pdfFonts = (await import('pdfmake/build/vfs_fonts')).default ?? (await import('pdfmake/build/vfs_fonts'));
     (pdfMake as any).vfs = (pdfFonts as any).pdfMake?.vfs ?? (pdfFonts as any).vfs ?? (pdfMake as any).vfs;
 
-    const docDefinition = buildInvoiceDocDefinition(invoice, company);
+    const docDefinition = buildInvoiceDocDefinition(invoice, company, template);
     (pdfMake as any).createPdf(docDefinition).download(`${invoice.number}.pdf`);
   }
 
   /** Exposed for tests — returns the pdfmake document definition without rendering. */
-  buildDocDefinition(invoice: Invoice, company: Pick<Company, 'name' | 'defaultCurrency'>): TDocumentDefinitions {
-    return buildInvoiceDocDefinition(invoice, company);
+  buildDocDefinition(
+    invoice: Invoice,
+    company: Pick<Company, 'name' | 'defaultCurrency'>,
+    template: InvoiceTemplate | null = null
+  ): TDocumentDefinitions {
+    return buildInvoiceDocDefinition(invoice, company, template);
   }
 }
 
@@ -47,10 +61,14 @@ function fmtCurrency(value: number, currency: string): string {
  * Returns the pdfmake content array for ONE copy of the invoice. The caller
  * places two of these side-by-side inside a top-level `columns` element with
  * a vertical dashed separator between them — see `buildInvoiceDocDefinition`.
+ *
+ * When `template === null`, this function emits zero new bands — the output is
+ * byte-identical (modulo the generated-at timestamp) to the prior layout.
  */
 function buildInvoiceCopy(
   invoice: Invoice,
   company: Pick<Company, 'name' | 'defaultCurrency'>,
+  template: InvoiceTemplate | null,
   copyLabel?: string
 ): any[] {
   const displayStatus = computeDisplayStatus(invoice).toUpperCase();
@@ -133,7 +151,11 @@ function buildInvoiceCopy(
     });
   }
 
+  // ----- Company name + header band (NEW) -----
   content.push({ text: company.name, style: 'companyHeader' });
+  const headerBand = renderHeaderBand(template);
+  if (headerBand) content.push(headerBand);
+
   content.push({ text: `Invoice ${invoice.number}`, style: 'invoiceHeader' });
 
   // Bill-to + dates as a single vertical stack (each copy is too narrow to
@@ -178,12 +200,142 @@ function buildInvoiceCopy(
   if (invoice.notes) {
     content.push({ text: invoice.notes, margin: [0, 6, 0, 0], italics: true });
   }
+
+  // ----- Footer band (bank + T&C) — NEW. Only when template is present. -----
+  const footerBand = renderFooterBand(template);
+  if (footerBand) content.push(footerBand);
+
+  // ----- Signature block (lower-right) — NEW. Only when template is present. -----
+  const signatureBlock = renderSignatureBlock(template, company);
+  if (signatureBlock) content.push(signatureBlock);
+
+  // ----- Disclaimer (small italic) — NEW. Only when template has it. -----
+  const disclaimer = renderDisclaimer(template);
+  if (disclaimer) content.push(disclaimer);
+
   content.push({ text: `Generated ${new Date().toISOString()}`, style: 'footer' });
 
   return content;
 }
 
-function buildInvoiceDocDefinition(invoice: Invoice, company: Pick<Company, 'name' | 'defaultCurrency'>): TDocumentDefinitions {
+// ----- New band renderers -----
+
+/**
+ * Header band: contact info + tax IDs below the company name. Returns `null`
+ * when the template is null or when all header fields are empty.
+ */
+function renderHeaderBand(template: InvoiceTemplate | null): any | null {
+  if (!template) return null;
+  const h = template.header ?? {};
+  const lines: any[] = [];
+
+  if (h.phone) lines.push({ text: h.phone, fontSize: 8 });
+
+  const contactPieces: string[] = [];
+  if (h.email) contactPieces.push(h.email);
+  if (h.website) contactPieces.push(h.website);
+  if (contactPieces.length) lines.push({ text: contactPieces.join(' · '), fontSize: 8 });
+
+  for (const addr of h.addressLines ?? []) {
+    if (addr) lines.push({ text: addr, fontSize: 8 });
+  }
+
+  const idPieces: string[] = [];
+  if (h.gstin) idPieces.push(`GSTIN: ${h.gstin}`);
+  if (h.pan) idPieces.push(`PAN: ${h.pan}`);
+  if (h.cin) idPieces.push(`CIN: ${h.cin}`);
+  if (idPieces.length) lines.push({ text: idPieces.join(' · '), fontSize: 8, bold: true });
+
+  if (lines.length === 0) return null;
+  return { stack: lines, margin: [0, 1, 0, 2] };
+}
+
+/**
+ * Footer band: Bank Details (left) + Terms & Conditions (right) in two columns.
+ * Returns `null` when both columns would be empty.
+ */
+function renderFooterBand(template: InvoiceTemplate | null): any | null {
+  if (!template) return null;
+  const f = template.footer ?? {};
+  const tnc = (template.termsAndConditions ?? '').trim();
+
+  const bankLines: any[] = [];
+  if (f.bankAccountName) bankLines.push({ text: `Account Name: ${f.bankAccountName}` });
+  if (f.bankName) bankLines.push({ text: `Bank: ${f.bankName}` });
+  if (f.accountNumber) bankLines.push({ text: `Account No.: ${f.accountNumber}` });
+  if (f.ifsc) bankLines.push({ text: `IFSC: ${f.ifsc}` });
+  if (f.branch) bankLines.push({ text: `Branch: ${f.branch}` });
+  if (f.upiId) bankLines.push({ text: `UPI: ${f.upiId}` });
+
+  if (bankLines.length === 0 && tnc === '') return null;
+
+  const leftCol: any = bankLines.length === 0
+    ? { text: '' }
+    : { stack: [{ text: 'Bank Details', bold: true, margin: [0, 0, 0, 2] }, ...bankLines] };
+
+  const rightCol: any = tnc === ''
+    ? { text: '' }
+    : { stack: [{ text: 'Terms & Conditions', bold: true, margin: [0, 0, 0, 2] }, { text: tnc, preserveLeadingSpaces: true }] };
+
+  return {
+    margin: [0, 8, 0, 0],
+    fontSize: 7,
+    columns: [leftCol, rightCol],
+    columnGap: 8
+  };
+}
+
+/**
+ * Signature block: anchored to the right side of the copy. Always renders the
+ * `For <Company Name>` line and the title (`Authorized Signatory` by default)
+ * — but only when a profile document exists. Returns `null` when `template` is
+ * null so empty-profile invoices render byte-identically to the prior layout.
+ */
+function renderSignatureBlock(
+  template: InvoiceTemplate | null,
+  company: Pick<Company, 'name' | 'defaultCurrency'>
+): any | null {
+  if (!template) return null;
+  const s = template.signature ?? {};
+  const title = (s.signatoryTitle ?? '').trim() || 'Authorized Signatory';
+  const stackLines: any[] = [{ text: `For ${company.name}`, bold: true }];
+  // ~36pt vertical gap reserved for a wet signature / stamp.
+  stackLines.push({ text: '\n\n\n', fontSize: 8 });
+  if (s.signatoryName) stackLines.push({ text: s.signatoryName });
+  stackLines.push({ text: title, italics: true });
+
+  return {
+    margin: [0, 10, 0, 0],
+    columns: [
+      { text: '' },
+      { width: 'auto', alignment: 'right', stack: stackLines, fontSize: 8 }
+    ]
+  };
+}
+
+/**
+ * Disclaimer: small italic text spanning the full copy width. Returns `null`
+ * when no disclaimer is configured.
+ */
+function renderDisclaimer(template: InvoiceTemplate | null): any | null {
+  if (!template) return null;
+  const d = (template.disclaimer ?? '').trim();
+  if (!d) return null;
+  return {
+    text: d,
+    italics: true,
+    fontSize: 7,
+    color: '#555',
+    preserveLeadingSpaces: true,
+    margin: [0, 8, 0, 0]
+  };
+}
+
+function buildInvoiceDocDefinition(
+  invoice: Invoice,
+  company: Pick<Company, 'name' | 'defaultCurrency'>,
+  template: InvoiceTemplate | null
+): TDocumentDefinitions {
   return {
     pageOrientation: 'landscape',
     pageSize: 'A4',
@@ -209,8 +361,8 @@ function buildInvoiceDocDefinition(invoice: Invoice, company: Pick<Company, 'nam
     content: [
       {
         columns: [
-          { stack: buildInvoiceCopy(invoice, company, 'ORIGINAL FOR RECIPIENT'), width: '*' },
-          { stack: buildInvoiceCopy(invoice, company, 'DUPLICATE FOR SUPPLIER'), width: '*' }
+          { stack: buildInvoiceCopy(invoice, company, template, 'ORIGINAL FOR RECIPIENT'), width: '*' },
+          { stack: buildInvoiceCopy(invoice, company, template, 'DUPLICATE FOR SUPPLIER'), width: '*' }
         ],
         columnGap: COLUMN_GAP
       }

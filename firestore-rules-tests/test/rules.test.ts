@@ -280,3 +280,72 @@ describe('users directory & counters', () => {
     await assertSucceeds(getDoc(doc(db, `companies/${COMPANY_A}/counters/invoice`)));
   });
 });
+
+describe('invoice-template profile doc', () => {
+  beforeEach(async () => { await seedCompany(COMPANY_A); await seedCompany(COMPANY_B); });
+
+  it('admin in tenant A CAN write the template doc', async () => {
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertSucceeds(setDoc(doc(db, `companies/${COMPANY_A}/private/invoice-template`), {
+      header: { phone: '+91 9876543210', gstin: '29ABCDE1234F1Z5' },
+      footer: { bankName: 'HDFC', accountNumber: '50100123456789' },
+      signature: { signatoryName: 'Alice', signatoryTitle: 'Director' },
+      termsAndConditions: 'Payment due within 14 days.',
+      disclaimer: 'Subject to Bengaluru jurisdiction.'
+    }));
+  });
+
+  it('admin in tenant A CAN read the template doc', async () => {
+    await env.withSecurityRulesDisabled(async (sctx) => {
+      await setDoc(doc(sctx.firestore(), `companies/${COMPANY_A}/private/invoice-template`), {
+        header: { phone: '+91 9876543210' }
+      });
+    });
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertSucceeds(getDoc(doc(db, `companies/${COMPANY_A}/private/invoice-template`)));
+  });
+
+  it('admin in tenant A CANNOT read tenant B template doc', async () => {
+    await env.withSecurityRulesDisabled(async (sctx) => {
+      await setDoc(doc(sctx.firestore(), `companies/${COMPANY_B}/private/invoice-template`), {
+        header: { phone: 'foreign' }
+      });
+    });
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(getDoc(doc(db, `companies/${COMPANY_B}/private/invoice-template`)));
+  });
+
+  it('admin in tenant A CANNOT write tenant B template doc', async () => {
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(setDoc(doc(db, `companies/${COMPANY_B}/private/invoice-template`), {
+      header: { phone: 'forbidden' }
+    }));
+  });
+
+  it('non-admin in tenant A CANNOT read the template doc', async () => {
+    await env.withSecurityRulesDisabled(async (sctx) => {
+      await setDoc(doc(sctx.firestore(), `companies/${COMPANY_A}/private/invoice-template`), {
+        header: { phone: '+91 9876543210' }
+      });
+    });
+    const db = userCtx(COMPANY_A).firestore();
+    await assertFails(getDoc(doc(db, `companies/${COMPANY_A}/private/invoice-template`)));
+  });
+
+  it('non-admin in tenant A CANNOT write the template doc', async () => {
+    const db = userCtx(COMPANY_A).firestore();
+    await assertFails(setDoc(doc(db, `companies/${COMPANY_A}/private/invoice-template`), {
+      header: { phone: 'forbidden' }
+    }));
+  });
+
+  it('unauthenticated client CANNOT read the template doc', async () => {
+    await env.withSecurityRulesDisabled(async (sctx) => {
+      await setDoc(doc(sctx.firestore(), `companies/${COMPANY_A}/private/invoice-template`), {
+        header: { phone: '+91 9876543210' }
+      });
+    });
+    const db = anonCtx().firestore();
+    await assertFails(getDoc(doc(db, `companies/${COMPANY_A}/private/invoice-template`)));
+  });
+});

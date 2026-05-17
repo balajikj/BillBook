@@ -44,6 +44,15 @@ In a browser:
    - **India GST product**: also create a product "Cotton T-shirt", unit price `499`, currency `INR`, HSN/SAC `6109`.
    - Go to **Users** → create user `bob@local.test`, "Bob". Copy the reset link, set Bob's password.
 
+3a. **Configure invoice profile (added by `invoice-branding`)**:
+   - Still signed in as Alice, click **Profile** in the side nav.
+   - **Header info**: phone `+91 9876543210`, email `sales@acme.example`, website `acme.example`, GSTIN `29ABCDE1234F1Z5`, PAN `ABCDE1234F`. Add two address lines: `12 MG Road` and `Bengaluru 560001`.
+   - **Footer / Payment info**: bank account name `Acme Pvt. Ltd.`, bank `HDFC Bank`, account number `50100123456789`, IFSC `HDFC0000123`, branch `MG Road`, UPI `acme@hdfcbank`.
+   - **Signature & Disclaimer**: signatory name `Alice Smith`, title `Director`. Terms & Conditions: `Payment due within 14 days.\nLate fee 1% per week.`. Disclaimer: `Subject to Bengaluru jurisdiction. Goods once sold cannot be returned.`
+   - Type a deliberately bad GSTIN (e.g. `123`) and Tab away — verify an inline red error appears and **Save** disables. Fix it back to a valid 15-char GSTIN before saving.
+   - Click **Save**. Confirm the "Saved." indicator appears and the form goes pristine.
+   - Click **Revert** — confirm the form re-loads the saved values (no diff).
+
 4. **Non-admin path**:
    - Sign out. Sign in as `bob@local.test` (still through `acme-co`).
    - You land on `/app/invoices`. Click "New invoice" — Globex is in the dropdown, "Consulting hour" is in the product picker. Create an invoice with 2 hours.
@@ -53,6 +62,8 @@ In a browser:
    - Sign out, sign in as Alice.
    - Open the invoice Bob just created → "Mark as Paid" → "Download PDF".
    - Verify the PDF downloads, shows `acme-co`'s name, the customer, the line items, and `PAID` status.
+   - **(added by `invoice-branding`)** Verify the PDF now ALSO renders, inside BOTH copies: the configured phone / email / website / address / GSTIN-PAN line below the company name; the **Bank Details** block (account name, bank, account number, IFSC, branch, UPI) and **Terms & Conditions** block below the totals; a `For <Company Name>` signature block in the lower-right with `Alice Smith` and `Director` under a wet-signature gap; and the configured disclaimer in small italic at the very bottom.
+   - **Cache-invalidation check (added by `invoice-branding`)**: re-download the SAME invoice immediately after editing one field on the Profile page (e.g. change the phone number), and verify the new value appears in the PDF without a page reload. Edit a field again and re-download — change still propagates. This proves the `CompanyProfileService.invalidate()` path works.
 
 5a. **India GST invoice path** (added by `india-gst-invoicing`):
    - Still signed in as Alice, click **New invoice**.

@@ -24,6 +24,7 @@ import { AuthService } from '../../core/services/auth.service';
           <a routerLink="/app/customers" routerLinkActive="active">Customers</a>
           <a routerLink="/app/products" routerLinkActive="active">Products</a>
           <a routerLink="/app/users" routerLinkActive="active">Users</a>
+          <a routerLink="/app/profile" routerLinkActive="active">Profile</a>
         }
       </aside>
       <main class="page"><router-outlet /></main>

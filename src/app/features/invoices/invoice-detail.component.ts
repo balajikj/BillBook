@@ -5,6 +5,7 @@ import { switchMap, of } from 'rxjs';
 import { toObservable } from '@angular/core/rxjs-interop';
 import { InvoiceService } from '../../core/services/invoice.service';
 import { CompanyService } from '../../core/services/company.service';
+import { CompanyProfileService } from '../../core/services/company-profile.service';
 import { AuthService } from '../../core/services/auth.service';
 import { PdfService } from '../../core/services/pdf.service';
 import { Invoice, computeDisplayStatus, getDisplayTotal, hasIndiaTotals } from '../../core/models/invoice';
@@ -136,6 +137,7 @@ import { numberToWords } from '../../core/utils/number-to-words';
 export class InvoiceDetailComponent {
   private readonly invoiceSvc = inject(InvoiceService);
   private readonly companySvc = inject(CompanyService);
+  private readonly profileSvc = inject(CompanyProfileService);
   private readonly pdfSvc = inject(PdfService);
   private readonly auth = inject(AuthService);
   private readonly router = inject(Router);
@@ -203,9 +205,20 @@ export class InvoiceDetailComponent {
     try {
       const cid = this.auth.companyId();
       if (!cid) throw new Error('No companyId on session.');
-      const gate = await this.companySvc.getGate(cid);
+      // Load the company gate (name, defaultCurrency) and the invoice template
+      // (header/footer/signature/disclaimer) in parallel. Template is null when
+      // the tenant has never saved a profile — the PDF renderer treats that as
+      // "render the prior layout, no new bands."
+      const [gate, template] = await Promise.all([
+        this.companySvc.getGate(cid),
+        this.profileSvc.getOrLoad()
+      ]);
       if (!gate) throw new Error('Company not found.');
-      await this.pdfSvc.generateInvoicePdf(inv, { name: gate.name, defaultCurrency: gate.defaultCurrency });
+      await this.pdfSvc.generateInvoicePdf(
+        inv,
+        { name: gate.name, defaultCurrency: gate.defaultCurrency },
+        template
+      );
     } catch (e: any) {
       this.error.set(e?.message ?? 'Failed to generate PDF.');
     } finally {

@@ -1,6 +1,12 @@
 # BillEasy
 
-Zero-cost, multi-tenant billing application built on the Firebase free (Spark) tier. Angular 21 SPA + Cloud Firestore + Firebase Auth + a single Cloud Function for privileged claims management. PDF invoices are generated client-side with `pdfmake`. Supports India-style **GST tax invoices** with CGST/SGST split, HSN/SAC codes, other charges, round-off, and grand-total-in-words rendering.
+Zero-cost, multi-tenant billing application built on the Firebase free (Spark) tier. Angular 21 SPA + Cloud Firestore + Firebase Auth + a single Cloud Function for privileged claims management. PDF invoices are generated client-side with `pdfmake`. Supports India-style **GST tax invoices** with CGST/SGST split, HSN/SAC codes, other charges, round-off, and grand-total-in-words rendering. Company admins configure a per-tenant **invoice profile** (header contact details, bank/UPI, signatory, T&C, disclaimer) under `/app/profile`, which the PDF generator applies to every invoice.
+
+## Non-goals (call-outs for future contributors)
+
+- **No image uploads** for logo / signature / stamp yet — invoice profile is text-only. Adding logo support is a follow-up change that introduces Firebase Storage.
+- **Single invoice template per company** — no multi-template picker on the invoice form.
+- **Invoice profile values apply to the PDF only** — not to the on-screen invoice detail view.
 
 ## Repository layout
 
