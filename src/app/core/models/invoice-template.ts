@@ -16,7 +16,8 @@ export interface InvoiceTemplate {
 export interface InvoiceTemplateHeader {
   phone?: string;
   email?: string;
-  addressLines?: string[];      // one line per element
+  /** Free-form address text. Line breaks in the string are preserved in the PDF. */
+  address?: string;
   gstin?: string;
   pan?: string;
   cin?: string;

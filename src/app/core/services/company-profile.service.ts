@@ -77,9 +77,19 @@ export class CompanyProfileService {
   private async fetch(cid: string): Promise<InvoiceTemplate | null> {
     const snap = await getDoc(doc(this.db, `companies/${cid}/private/invoice-template`));
     if (!snap.exists()) return null;
-    const raw = snap.data() as InvoiceTemplate;
+    const raw = snap.data() as any;
+    const header: any = { ...(raw.header ?? {}) };
+    // Backward-compat: older docs stored a multi-line address as `addressLines: string[]`.
+    // Convert to the new single `address` string and drop the old field.
+    if (Array.isArray(header.addressLines) && !header.address) {
+      header.address = (header.addressLines as string[])
+        .map((l) => (l ?? '').toString())
+        .filter((l) => l.trim() !== '')
+        .join('\n');
+    }
+    delete header.addressLines;
     return {
-      header: raw.header ?? {},
+      header,
       footer: raw.footer ?? {},
       signature: raw.signature ?? {},
       termsAndConditions: raw.termsAndConditions ?? undefined,
@@ -103,14 +113,6 @@ function cloneEmpty(): InvoiceTemplate {
 function stripEmpty(template: InvoiceTemplate): InvoiceTemplate {
   const out: any = {};
   const header = stripStringFields(template.header ?? {});
-  // Header's addressLines is an array; the generic string-field stripper kept it as-is.
-  if (Array.isArray(header['addressLines'])) {
-    const lines = (header['addressLines'] as string[])
-      .map((l) => (l ?? '').trim())
-      .filter((l) => l !== '');
-    if (lines.length) header['addressLines'] = lines;
-    else delete header['addressLines'];
-  }
   if (Object.keys(header).length) out.header = header;
 
   const footer = stripStringFields(template.footer ?? {});

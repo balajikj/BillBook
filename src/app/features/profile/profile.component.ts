@@ -1,14 +1,13 @@
 import { Component, inject, signal } from '@angular/core';
 import {
   AbstractControl,
-  FormArray,
   FormBuilder,
   FormControl,
-  FormGroup,
   ReactiveFormsModule,
   ValidationErrors,
   Validators
 } from '@angular/forms';
+// Note: FormControl is used inside optionalEmail() below.
 import { CompanyProfileService } from '../../core/services/company-profile.service';
 import {
   ACCOUNT_NUMBER_REGEX,
@@ -83,16 +82,10 @@ function optionalEmail(c: AbstractControl): ValidationErrors | null {
           </label>
         </div>
 
-        <h3 class="muted small">Address</h3>
-        <div formArrayName="addressLines">
-          @for (line of addressLines.controls; track $index; let i = $index) {
-            <div class="row">
-              <input [formControlName]="i" placeholder="Address line {{ i + 1 }}" />
-              <button type="button" (click)="removeAddressLine(i)" [disabled]="addressLines.length === 1">−</button>
-            </div>
-          }
-        </div>
-        <p><button type="button" (click)="addAddressLine()">+ Add address line</button></p>
+        <label class="block">
+          Address <span class="muted small">(free-form; use Enter to break across lines if you want)</span>
+          <textarea formControlName="address" rows="3" placeholder="12 MG Road, Bengaluru 560001"></textarea>
+        </label>
       </section>
 
       <!-- ============================================================== -->
@@ -220,7 +213,7 @@ export class ProfileComponent {
       gstin: ['', [optionalPattern(GSTIN_REGEX, 'gstin')]],
       pan: ['', [optionalPattern(PAN_REGEX, 'pan')]],
       cin: [''],
-      addressLines: this.fb.array<FormControl<string>>([this.fb.nonNullable.control('')])
+      address: ['']
     }),
     footer: this.fb.nonNullable.group({
       bankAccountName: [''],
@@ -237,10 +230,6 @@ export class ProfileComponent {
     termsAndConditions: ['', [Validators.maxLength(TEXT_AREA_MAX)]],
     disclaimer: ['', [Validators.maxLength(TEXT_AREA_MAX)]]
   });
-
-  get addressLines(): FormArray<FormControl<string>> {
-    return this.form.controls.header.controls.addressLines as FormArray<FormControl<string>>;
-  }
 
   constructor() {
     // Auto-uppercase GSTIN, PAN, IFSC on every change.
@@ -261,15 +250,6 @@ export class ProfileComponent {
   }
 
   private patchFromTemplate(tpl: InvoiceTemplate): void {
-    // Rebuild the address-lines array to match the loaded count.
-    const lines = tpl.header?.addressLines ?? [];
-    while (this.addressLines.length > 0) this.addressLines.removeAt(0);
-    if (lines.length === 0) {
-      this.addressLines.push(this.fb.nonNullable.control(''));
-    } else {
-      for (const line of lines) this.addressLines.push(this.fb.nonNullable.control(line ?? ''));
-    }
-
     this.form.patchValue({
       header: {
         phone: tpl.header?.phone ?? '',
@@ -277,7 +257,8 @@ export class ProfileComponent {
         website: tpl.header?.website ?? '',
         gstin: tpl.header?.gstin ?? '',
         pan: tpl.header?.pan ?? '',
-        cin: tpl.header?.cin ?? ''
+        cin: tpl.header?.cin ?? '',
+        address: tpl.header?.address ?? ''
       },
       footer: {
         bankAccountName: tpl.footer?.bankAccountName ?? '',
@@ -298,17 +279,6 @@ export class ProfileComponent {
     this.savedOk.set(false);
   }
 
-  addAddressLine(): void {
-    this.addressLines.push(this.fb.nonNullable.control(''));
-    this.addressLines.markAsDirty();
-  }
-
-  removeAddressLine(i: number): void {
-    if (this.addressLines.length === 1) return; // keep at least one input visible
-    this.addressLines.removeAt(i);
-    this.addressLines.markAsDirty();
-  }
-
   async onSave(): Promise<void> {
     if (this.form.invalid) return;
     this.busy.set(true);
@@ -318,7 +288,7 @@ export class ProfileComponent {
       let website = (raw.header.website ?? '').trim();
       if (website && !/^https?:\/\//i.test(website)) website = `https://${website}`;
       const template: InvoiceTemplate = {
-        header: { ...raw.header, website, addressLines: raw.header.addressLines as string[] },
+        header: { ...raw.header, website },
         footer: { ...raw.footer },
         signature: { ...raw.signature },
         termsAndConditions: raw.termsAndConditions,

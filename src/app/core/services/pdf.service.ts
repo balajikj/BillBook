@@ -221,33 +221,83 @@ function buildInvoiceCopy(
 // ----- New band renderers -----
 
 /**
- * Header band: contact info + tax IDs below the company name. Returns `null`
- * when the template is null or when all header fields are empty.
+ * Header band: structured contact + address + tax-ID info below the company
+ * name. Returns `null` when the template is null or when all header fields are
+ * empty.
+ *
+ * Visual structure (each line a separate row, all left-aligned):
+ *
+ *   <Company name>                                  ← already drawn above this band
+ *   <Address line 1>
+ *   <Address line 2>
+ *   Phone: 9876543210 | Email: foo@bar.com | Web: example.com
+ *   GSTIN: 29ABCDE1234F1Z5 | PAN: ABCDE1234F | CIN: ...
+ *
+ * Address lines come from the single `header.address` string split on newlines.
+ * Contact + tax-ID rows show only the populated fields and drop their
+ * separators when a field is absent. URLs have their `http(s)://` prefix
+ * stripped for visual cleanliness — the underlying value in Firestore is
+ * preserved unchanged.
  */
 function renderHeaderBand(template: InvoiceTemplate | null): any | null {
   if (!template) return null;
   const h = template.header ?? {};
   const lines: any[] = [];
 
-  if (h.phone) lines.push({ text: h.phone, fontSize: 8 });
-
-  const contactPieces: string[] = [];
-  if (h.email) contactPieces.push(h.email);
-  if (h.website) contactPieces.push(h.website);
-  if (contactPieces.length) lines.push({ text: contactPieces.join(' · '), fontSize: 8 });
-
-  for (const addr of h.addressLines ?? []) {
-    if (addr) lines.push({ text: addr, fontSize: 8 });
+  // Address block — each non-empty line is its own row, small spacing.
+  if (h.address) {
+    for (const addr of h.address.split(/\r?\n/)) {
+      const trimmed = addr.trim();
+      if (trimmed) lines.push({ text: trimmed, fontSize: 8, color: '#444' });
+    }
   }
 
-  const idPieces: string[] = [];
-  if (h.gstin) idPieces.push(`GSTIN: ${h.gstin}`);
-  if (h.pan) idPieces.push(`PAN: ${h.pan}`);
-  if (h.cin) idPieces.push(`CIN: ${h.cin}`);
-  if (idPieces.length) lines.push({ text: idPieces.join(' · '), fontSize: 8, bold: true });
+  // Contact info row: Phone | Email | Web, labeled.
+  const contactPieces: Array<{ label: string; value: string }> = [];
+  if (h.phone) contactPieces.push({ label: 'Phone', value: h.phone });
+  if (h.email) contactPieces.push({ label: 'Email', value: h.email });
+  if (h.website) {
+    const stripped = h.website.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    contactPieces.push({ label: 'Web', value: stripped });
+  }
+  if (contactPieces.length) {
+    lines.push({
+      text: joinLabeledPieces(contactPieces),
+      fontSize: 8,
+      color: '#444',
+      margin: [0, lines.length ? 2 : 0, 0, 0]
+    });
+  }
+
+  // Tax-ID row: GSTIN | PAN | CIN — same labelled pattern, slightly bolder.
+  const idPieces: Array<{ label: string; value: string }> = [];
+  if (h.gstin) idPieces.push({ label: 'GSTIN', value: h.gstin });
+  if (h.pan) idPieces.push({ label: 'PAN', value: h.pan });
+  if (h.cin) idPieces.push({ label: 'CIN', value: h.cin });
+  if (idPieces.length) {
+    lines.push({
+      text: joinLabeledPieces(idPieces, /* valueBold */ true),
+      fontSize: 8,
+      margin: [0, lines.length ? 2 : 0, 0, 0]
+    });
+  }
 
   if (lines.length === 0) return null;
-  return { stack: lines, margin: [0, 1, 0, 2] };
+  return { stack: lines, margin: [0, 2, 0, 6] };
+}
+
+/** Builds a pdfmake `text` array of the form `Label: value  |  Label: value`. */
+function joinLabeledPieces(
+  pieces: Array<{ label: string; value: string }>,
+  valueBold = false
+): any[] {
+  const out: any[] = [];
+  pieces.forEach((p, i) => {
+    if (i > 0) out.push({ text: '  |  ', color: '#bbb' });
+    out.push({ text: `${p.label}: `, bold: true });
+    out.push({ text: p.value, bold: valueBold });
+  });
+  return out;
 }
 
 /**
