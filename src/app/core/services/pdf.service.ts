@@ -201,13 +201,11 @@ function buildInvoiceCopy(
     content.push({ text: invoice.notes, margin: [0, 6, 0, 0], italics: true });
   }
 
-  // ----- Footer band (bank + T&C) — NEW. Only when template is present. -----
-  const footerBand = renderFooterBand(template);
+  // ----- Footer band: Bank Details (left) | Signature (right) -----
+  // Renders only when a template document exists. The signature column always
+  // shows when there's a template, with default "Authorized Signatory" text.
+  const footerBand = renderFooterBand(template, company);
   if (footerBand) content.push(footerBand);
-
-  // ----- Signature block (lower-right) — NEW. Only when template is present. -----
-  const signatureBlock = renderSignatureBlock(template, company);
-  if (signatureBlock) content.push(signatureBlock);
 
   // ----- Disclaimer (small italic) — NEW. Only when template has it. -----
   const disclaimer = renderDisclaimer(template);
@@ -301,13 +299,19 @@ function joinLabeledPieces(
 }
 
 /**
- * Footer band: Bank Details (left) + Terms & Conditions (right) in two columns.
- * Returns `null` when both columns would be empty.
+ * Footer band: Bank Details on the left, Signature block on the right.
+ * Renders only when a profile template exists (i.e. the tenant has touched
+ * the Profile page). Bank Details column collapses to an empty cell when no
+ * bank fields are set; the Signature column always renders with at least
+ * `For <Company Name>` + `Authorized Signatory`.
  */
-function renderFooterBand(template: InvoiceTemplate | null): any | null {
+function renderFooterBand(
+  template: InvoiceTemplate | null,
+  company: Pick<Company, 'name' | 'defaultCurrency'>
+): any | null {
   if (!template) return null;
   const f = template.footer ?? {};
-  const tnc = (template.termsAndConditions ?? '').trim();
+  const s = template.signature ?? {};
 
   const bankLines: any[] = [];
   if (f.bankAccountName) bankLines.push({ text: `Account Name: ${f.bankAccountName}` });
@@ -317,49 +321,24 @@ function renderFooterBand(template: InvoiceTemplate | null): any | null {
   if (f.branch) bankLines.push({ text: `Branch: ${f.branch}` });
   if (f.upiId) bankLines.push({ text: `UPI: ${f.upiId}` });
 
-  if (bankLines.length === 0 && tnc === '') return null;
-
   const leftCol: any = bankLines.length === 0
     ? { text: '' }
     : { stack: [{ text: 'Bank Details', bold: true, margin: [0, 0, 0, 2] }, ...bankLines] };
 
-  const rightCol: any = tnc === ''
-    ? { text: '' }
-    : { stack: [{ text: 'Terms & Conditions', bold: true, margin: [0, 0, 0, 2] }, { text: tnc, preserveLeadingSpaces: true }] };
-
-  return {
-    margin: [0, 8, 0, 0],
-    fontSize: 7,
-    columns: [leftCol, rightCol],
-    columnGap: 8
-  };
-}
-
-/**
- * Signature block: anchored to the right side of the copy. Always renders the
- * `For <Company Name>` line and the title (`Authorized Signatory` by default)
- * — but only when a profile document exists. Returns `null` when `template` is
- * null so empty-profile invoices render byte-identically to the prior layout.
- */
-function renderSignatureBlock(
-  template: InvoiceTemplate | null,
-  company: Pick<Company, 'name' | 'defaultCurrency'>
-): any | null {
-  if (!template) return null;
-  const s = template.signature ?? {};
+  // Signature column — always present.
   const title = (s.signatoryTitle ?? '').trim() || 'Authorized Signatory';
-  const stackLines: any[] = [{ text: `For ${company.name}`, bold: true }];
-  // ~36pt vertical gap reserved for a wet signature / stamp.
-  stackLines.push({ text: '\n\n\n', fontSize: 8 });
-  if (s.signatoryName) stackLines.push({ text: s.signatoryName });
-  stackLines.push({ text: title, italics: true });
+  const sigLines: any[] = [{ text: `For ${company.name}`, bold: true, alignment: 'right' }];
+  // Reserved vertical space for a wet signature / stamp.
+  sigLines.push({ text: '\n\n\n', fontSize: 7 });
+  if (s.signatoryName) sigLines.push({ text: s.signatoryName, alignment: 'right' });
+  sigLines.push({ text: title, italics: true, alignment: 'right' });
+  const rightCol: any = { stack: sigLines };
 
   return {
     margin: [0, 10, 0, 0],
-    columns: [
-      { text: '' },
-      { width: 'auto', alignment: 'right', stack: stackLines, fontSize: 8 }
-    ]
+    fontSize: 7,
+    columns: [leftCol, rightCol],
+    columnGap: 8
   };
 }
 

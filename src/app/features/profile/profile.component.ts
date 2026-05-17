@@ -142,14 +142,6 @@ function optionalEmail(c: AbstractControl): ValidationErrors | null {
         </div>
 
         <label class="block">
-          Terms &amp; Conditions <span class="muted small">(multi-line, up to {{ maxTextLen }} chars; printed on each copy)</span>
-          <textarea formControlName="termsAndConditions" rows="3" [maxlength]="maxTextLen"></textarea>
-          @if (showError(form.controls.termsAndConditions)) {
-            <small class="field-error">Must be {{ maxTextLen }} characters or fewer.</small>
-          }
-        </label>
-
-        <label class="block">
           Disclaimer <span class="muted small">(multi-line, up to {{ maxTextLen }} chars; printed as small italic at the bottom)</span>
           <textarea formControlName="disclaimer" rows="2" [maxlength]="maxTextLen"></textarea>
           @if (showError(form.controls.disclaimer)) {
@@ -227,7 +219,6 @@ export class ProfileComponent {
       signatoryName: [''],
       signatoryTitle: ['']
     }),
-    termsAndConditions: ['', [Validators.maxLength(TEXT_AREA_MAX)]],
     disclaimer: ['', [Validators.maxLength(TEXT_AREA_MAX)]]
   });
 
@@ -272,7 +263,6 @@ export class ProfileComponent {
         signatoryName: tpl.signature?.signatoryName ?? '',
         signatoryTitle: tpl.signature?.signatoryTitle ?? ''
       },
-      termsAndConditions: tpl.termsAndConditions ?? '',
       disclaimer: tpl.disclaimer ?? ''
     });
     this.form.markAsPristine();
@@ -291,7 +281,6 @@ export class ProfileComponent {
         header: { ...raw.header, website },
         footer: { ...raw.footer },
         signature: { ...raw.signature },
-        termsAndConditions: raw.termsAndConditions,
         disclaimer: raw.disclaimer
       };
       await this.profileSvc.save(template);

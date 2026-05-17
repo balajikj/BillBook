@@ -7,7 +7,6 @@ export interface InvoiceTemplate {
   header?: InvoiceTemplateHeader;
   footer?: InvoiceTemplateFooter;
   signature?: InvoiceTemplateSignature;
-  termsAndConditions?: string; // multi-line; line breaks preserved in PDF
   disclaimer?: string;          // multi-line; renders as small italic under signature
   updatedAt?: Timestamp;
   updatedBy?: string;           // uid of the admin who last saved

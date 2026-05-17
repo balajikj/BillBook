@@ -92,7 +92,6 @@ export class CompanyProfileService {
       header,
       footer: raw.footer ?? {},
       signature: raw.signature ?? {},
-      termsAndConditions: raw.termsAndConditions ?? undefined,
       disclaimer: raw.disclaimer ?? undefined,
       updatedAt: raw.updatedAt,
       updatedBy: raw.updatedBy
@@ -121,8 +120,6 @@ function stripEmpty(template: InvoiceTemplate): InvoiceTemplate {
   const signature = stripStringFields(template.signature ?? {});
   if (Object.keys(signature).length) out.signature = signature;
 
-  const t = (template.termsAndConditions ?? '').trim();
-  if (t) out.termsAndConditions = t;
   const d = (template.disclaimer ?? '').trim();
   if (d) out.disclaimer = d;
 
