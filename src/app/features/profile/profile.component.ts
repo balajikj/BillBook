@@ -9,6 +9,8 @@ import {
 } from '@angular/forms';
 // Note: FormControl is used inside optionalEmail() below.
 import { CompanyProfileService } from '../../core/services/company-profile.service';
+import { CompanyService } from '../../core/services/company.service';
+import { Company } from '../../core/models/company';
 import {
   ACCOUNT_NUMBER_REGEX,
   GSTIN_REGEX,
@@ -45,6 +47,37 @@ function optionalEmail(c: AbstractControl): ValidationErrors | null {
     </header>
 
     <form [formGroup]="form" (ngSubmit)="onSave()" novalidate>
+
+      <!-- ============================================================== -->
+      <!-- COMPANY (admin self-service for name + defaultCurrency) -->
+      <!-- ============================================================== -->
+      <section class="card" formGroupName="company">
+        <h2>Company</h2>
+
+        <div class="grid">
+          <label>
+            Code
+            <input formControlName="code" />
+            <small class="muted small">Set by platform admin.</small>
+          </label>
+          <label>
+            Status
+            <input formControlName="status" />
+            <small class="muted small">Set by platform admin.</small>
+          </label>
+          <label>
+            Name
+            <input formControlName="name" placeholder="Acme Co." maxlength="120" />
+            @if (showError(companyCtrl('name'))) { <small class="field-error">Required, 1–120 characters.</small> }
+          </label>
+          <label>
+            Default currency
+            <input formControlName="defaultCurrency" maxlength="3" placeholder="USD" />
+            @if (showError(companyCtrl('defaultCurrency'))) { <small class="field-error">Three uppercase letters, e.g. <code>USD</code>.</small> }
+            <small class="muted small">Default for new invoices and new customers; existing records keep their saved currency.</small>
+          </label>
+        </div>
+      </section>
 
       <!-- ============================================================== -->
       <!-- HEADER -->
@@ -191,6 +224,7 @@ function optionalEmail(c: AbstractControl): ValidationErrors | null {
 export class ProfileComponent {
   private readonly fb = inject(FormBuilder);
   private readonly profileSvc = inject(CompanyProfileService);
+  private readonly companies = inject(CompanyService);
 
   readonly maxTextLen = TEXT_AREA_MAX;
   readonly busy = signal(false);
@@ -198,6 +232,12 @@ export class ProfileComponent {
   readonly savedOk = signal(false);
 
   readonly form = this.fb.nonNullable.group({
+    company: this.fb.nonNullable.group({
+      code: [{ value: '', disabled: true }],
+      status: [{ value: '', disabled: true }],
+      name: ['', [Validators.required, Validators.maxLength(120)]],
+      defaultCurrency: ['', [Validators.required, Validators.pattern(/^[A-Z]{3}$/)]]
+    }),
     header: this.fb.nonNullable.group({
       phone: [''],
       email: ['', [optionalEmail]],
@@ -223,21 +263,37 @@ export class ProfileComponent {
   });
 
   constructor() {
-    // Auto-uppercase GSTIN, PAN, IFSC on every change.
+    // Auto-uppercase GSTIN, PAN, IFSC, CIN, and the company default currency on every change.
     this.autoUppercase(this.headerCtrl('gstin'));
     this.autoUppercase(this.headerCtrl('pan'));
     this.autoUppercase(this.footerCtrl('ifsc'));
     this.autoUppercase(this.headerCtrl('cin'));
+    this.autoUppercase(this.companyCtrl('defaultCurrency'));
     this.resetFromServer();
   }
 
-  /** Re-fetches the profile and patches the form. Used as the "Revert" action. */
+  /** Re-fetches the profile + company gate and patches the form. Used as the "Revert" action. */
   resetFromServer(): void {
     this.profileSvc.invalidate();
+    this.companies.invalidate();
     this.busy.set(true);
-    this.profileSvc.getOrLoadForEdit().then((tpl) => this.patchFromTemplate(tpl))
+    Promise.all([this.profileSvc.getOrLoadForEdit(), this.companies.getMyGate()])
+      .then(([tpl, gate]) => {
+        this.patchFromTemplate(tpl);
+        this.patchFromGate(gate);
+      })
       .catch((e) => this.saveError.set(e?.message ?? 'Failed to load profile.'))
       .finally(() => this.busy.set(false));
+  }
+
+  private patchFromGate(gate: Company | null): void {
+    this.form.controls.company.patchValue({
+      code: gate?.id ?? '',
+      status: gate?.status ?? '',
+      name: gate?.name ?? '',
+      defaultCurrency: gate?.defaultCurrency ?? ''
+    });
+    this.form.controls.company.markAsPristine();
   }
 
   private patchFromTemplate(tpl: InvoiceTemplate): void {
@@ -283,12 +339,42 @@ export class ProfileComponent {
         signature: { ...raw.signature },
         disclaimer: raw.disclaimer
       };
-      await this.profileSvc.save(template);
+
+      const companyDirty = this.form.controls.company.dirty;
+      const writes: Array<{ label: string; promise: Promise<void> }> = [
+        { label: 'invoice template', promise: this.profileSvc.save(template) }
+      ];
+      if (companyDirty) {
+        const c = this.form.controls.company.controls;
+        writes.push({
+          label: 'company info',
+          promise: this.companies.updateGateInfo({
+            name: c.name.value,
+            defaultCurrency: c.defaultCurrency.value
+          })
+        });
+      }
+
+      // Per-write error attribution: we want the user to know WHICH write
+      // failed if one of them does, rather than a generic "save failed".
+      const results = await Promise.allSettled(writes.map((w) => w.promise));
+      const failures = results
+        .map((r, i) => ({ r, label: writes[i].label }))
+        .filter((x) => x.r.status === 'rejected') as Array<{ r: PromiseRejectedResult; label: string }>;
+      if (failures.length) {
+        const msgs = failures.map((f) => `${f.label}: ${f.r.reason?.message ?? f.r.reason}`);
+        throw new Error(`Failed to save ${msgs.join('; ')}`);
+      }
+
       this.form.markAsPristine();
       this.savedOk.set(true);
       // Refresh from server so any server-side transformations (timestamps) show up.
-      const fresh = await this.profileSvc.getOrLoadForEdit();
+      const [fresh, freshGate] = await Promise.all([
+        this.profileSvc.getOrLoadForEdit(),
+        this.companies.getMyGate()
+      ]);
       this.patchFromTemplate(fresh);
+      this.patchFromGate(freshGate);
       this.savedOk.set(true);
     } catch (e: any) {
       this.saveError.set(e?.message ?? 'Save failed.');
@@ -308,6 +394,9 @@ export class ProfileComponent {
   }
   footerCtrl(name: 'bankAccountName' | 'bankName' | 'accountNumber' | 'ifsc' | 'branch' | 'upiId'): AbstractControl {
     return this.form.controls.footer.get(name)!;
+  }
+  companyCtrl(name: 'code' | 'status' | 'name' | 'defaultCurrency'): AbstractControl {
+    return this.form.controls.company.get(name)!;
   }
 
   private autoUppercase(control: AbstractControl): void {

@@ -1,6 +1,9 @@
 import { Injectable, inject } from '@angular/core';
-import { Firestore, collection, collectionData, doc, docData, getDoc } from '@angular/fire/firestore';
+import {
+  Firestore, collection, collectionData, doc, docData, getDoc, serverTimestamp, updateDoc
+} from '@angular/fire/firestore';
 import { Observable } from 'rxjs';
+import { AuthService } from './auth.service';
 import { Company, CompanyStatus } from '../models/company';
 
 function quote(value: string): string {
@@ -11,11 +14,57 @@ function quote(value: string): string {
 @Injectable({ providedIn: 'root' })
 export class CompanyService {
   private readonly db = inject(Firestore);
+  private readonly auth = inject(AuthService);
 
   async getGate(companyCode: string): Promise<Company | null> {
     const snap = await getDoc(doc(this.db, `companies/${companyCode}`));
     if (!snap.exists()) return null;
     return { id: snap.id, ...(snap.data() as Omit<Company, 'id'>) };
+  }
+
+  /** Convenience: read the gate doc for the signed-in tenant. */
+  async getMyGate(): Promise<Company | null> {
+    const cid = this.auth.companyId();
+    if (!cid) return null;
+    return this.getGate(cid);
+  }
+
+  /**
+   * Updates the cosmetic fields (`name`, `defaultCurrency`) of the signed-in
+   * tenant's gate document. The doc ID and status remain super-admin-only;
+   * Firestore Security Rules enforce that constraint independently.
+   *
+   * Client-side validation mirrors the rule constraints to surface errors
+   * before the network round-trip:
+   * - `name` is required, 1..120 characters after trimming.
+   * - `defaultCurrency` matches `^[A-Z]{3}$` after trimming + uppercasing.
+   */
+  async updateGateInfo(args: { name: string; defaultCurrency: string }): Promise<void> {
+    const cid = this.auth.companyId();
+    if (!cid) throw new Error('Not signed in to a tenant.');
+    const name = (args.name ?? '').trim();
+    const defaultCurrency = (args.defaultCurrency ?? '').trim().toUpperCase();
+    if (name.length < 1 || name.length > 120) {
+      throw new Error('Company name must be 1–120 characters.');
+    }
+    if (!/^[A-Z]{3}$/.test(defaultCurrency)) {
+      throw new Error('Default currency must be three uppercase letters (ISO 4217).');
+    }
+    await updateDoc(doc(this.db, `companies/${cid}`), {
+      name,
+      defaultCurrency,
+      updatedAt: serverTimestamp()
+    });
+    this.invalidate();
+  }
+
+  /**
+   * No-op today — placeholder for future caching of `getGate`. Callers that
+   * just wrote the gate doc should still invoke this so the surface stays
+   * cache-aware as the codebase grows. Mirrors `CompanyProfileService.invalidate()`.
+   */
+  invalidate(): void {
+    // Intentionally empty.
   }
 
   listAll$(): Observable<Company[]> {

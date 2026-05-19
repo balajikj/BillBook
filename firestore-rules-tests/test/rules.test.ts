@@ -104,6 +104,102 @@ describe('companies (gate document)', () => {
       name: 'Bad', status: 'active', defaultCurrency: 'USD'
     }));
   });
+
+  // ----- admin self-service of name + defaultCurrency (added by admin-company-settings) -----
+
+  it('company-admin CAN update only `name` of their own gate doc', async () => {
+    await seedCompany(COMPANY_A);
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertSucceeds(updateDoc(doc(db, 'companies', COMPANY_A), {
+      name: 'Acme Trading Co.'
+    }));
+  });
+
+  it('company-admin CAN update only `defaultCurrency` of their own gate doc', async () => {
+    await seedCompany(COMPANY_A);
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertSucceeds(updateDoc(doc(db, 'companies', COMPANY_A), {
+      defaultCurrency: 'INR'
+    }));
+  });
+
+  it('company-admin CANNOT change `status`', async () => {
+    await seedCompany(COMPANY_A, 'inactive');
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(updateDoc(doc(db, 'companies', COMPANY_A), {
+      status: 'active'
+    }));
+  });
+
+  it('company-admin CANNOT update another tenant gate doc', async () => {
+    await seedCompany(COMPANY_A);
+    await seedCompany(COMPANY_B);
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(updateDoc(doc(db, 'companies', COMPANY_B), {
+      name: 'Hijacked'
+    }));
+  });
+
+  it('company-admin CANNOT add a new top-level field', async () => {
+    await seedCompany(COMPANY_A);
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(updateDoc(doc(db, 'companies', COMPANY_A), {
+      customField: 'value'
+    }));
+  });
+
+  it('company-admin CANNOT submit an empty `name`', async () => {
+    await seedCompany(COMPANY_A);
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(updateDoc(doc(db, 'companies', COMPANY_A), {
+      name: ''
+    }));
+  });
+
+  it('company-admin CANNOT submit a lowercase `defaultCurrency`', async () => {
+    await seedCompany(COMPANY_A);
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(updateDoc(doc(db, 'companies', COMPANY_A), {
+      defaultCurrency: 'usd'
+    }));
+  });
+
+  it('company-admin CANNOT submit a 4-letter `defaultCurrency`', async () => {
+    await seedCompany(COMPANY_A);
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(updateDoc(doc(db, 'companies', COMPANY_A), {
+      defaultCurrency: 'USDX'
+    }));
+  });
+
+  it('non-admin (company-user) CANNOT update gate doc', async () => {
+    await seedCompany(COMPANY_A);
+    const db = userCtx(COMPANY_A).firestore();
+    await assertFails(updateDoc(doc(db, 'companies', COMPANY_A), {
+      name: 'Forbidden'
+    }));
+  });
+
+  it('company-admin CANNOT create a new gate doc', async () => {
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(setDoc(doc(db, 'companies', 'new-tenant-co'), {
+      name: 'New', status: 'active', defaultCurrency: 'USD'
+    }));
+  });
+
+  it('company-admin CANNOT delete their own gate doc', async () => {
+    await seedCompany(COMPANY_A);
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(deleteDoc(doc(db, 'companies', COMPANY_A)));
+  });
+
+  it('super-admin behaviour unchanged: status flip still allowed', async () => {
+    await seedCompany(COMPANY_A);
+    const db = superCtx().firestore();
+    await assertSucceeds(updateDoc(doc(db, 'companies', COMPANY_A), {
+      status: 'inactive'
+    }));
+  });
 });
 
 describe('customers (per-tenant isolation)', () => {

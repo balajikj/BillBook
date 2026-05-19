@@ -4,6 +4,7 @@ import { Invoice, computeDisplayStatus, getDisplayTotal, hasIndiaTotals } from '
 import { Company } from '../models/company';
 import { InvoiceTemplate } from '../models/invoice-template';
 import { numberToWords } from '../utils/number-to-words';
+import { buildUpiDeepLink } from '../utils/upi';
 
 // Flip to true to print `ORIGINAL FOR RECIPIENT` / `DUPLICATE FOR SUPPLIER`
 // badges (standard Indian GST convention) at the top-right of each copy.
@@ -35,18 +36,48 @@ export class PdfService {
     const pdfFonts = (await import('pdfmake/build/vfs_fonts')).default ?? (await import('pdfmake/build/vfs_fonts'));
     (pdfMake as any).vfs = (pdfFonts as any).pdfMake?.vfs ?? (pdfFonts as any).vfs ?? (pdfMake as any).vfs;
 
-    const docDefinition = buildInvoiceDocDefinition(invoice, company, template);
+    // UPI QR renders whenever (a) the tenant has a UPI ID configured and
+    // (b) the invoice currency is INR (UPI is INR-only). Status (paid /
+    // pending / overdue) is NOT a gate — the customer often wants to scan an
+    // already-paid invoice for reference or to record the transaction.
+    const qrDataUrl = await maybeGenerateUpiQr(invoice, company, template);
+    const docDefinition = buildInvoiceDocDefinition(invoice, company, template, qrDataUrl);
     (pdfMake as any).createPdf(docDefinition).download(`${invoice.number}.pdf`);
   }
 
   /** Exposed for tests — returns the pdfmake document definition without rendering. */
-  buildDocDefinition(
+  async buildDocDefinition(
     invoice: Invoice,
     company: Pick<Company, 'name' | 'defaultCurrency'>,
     template: InvoiceTemplate | null = null
-  ): TDocumentDefinitions {
-    return buildInvoiceDocDefinition(invoice, company, template);
+  ): Promise<TDocumentDefinitions> {
+    const qrDataUrl = await maybeGenerateUpiQr(invoice, company, template);
+    return buildInvoiceDocDefinition(invoice, company, template, qrDataUrl);
   }
+}
+
+/**
+ * Returns a base64 PNG data URL of the UPI QR when all gating conditions hold,
+ * otherwise null. Dynamically imports the `qrcode` library so its ~30 KB only
+ * lands in the chunk fetched when a PDF is actually downloaded.
+ */
+async function maybeGenerateUpiQr(
+  invoice: Invoice,
+  company: Pick<Company, 'name' | 'defaultCurrency'>,
+  template: InvoiceTemplate | null
+): Promise<string | null> {
+  const upiId = (template?.footer?.upiId ?? '').trim();
+  if (!upiId) return null;
+  if (invoice.currency !== 'INR') return null;
+
+  const QRCode = (await import('qrcode')).default ?? (await import('qrcode'));
+  const payload = buildUpiDeepLink({
+    vpa: upiId,
+    payeeName: company.name,
+    amount: getDisplayTotal(invoice),
+    transactionNote: invoice.number
+  });
+  return (QRCode as any).toDataURL(payload, { errorCorrectionLevel: 'M', margin: 1 });
 }
 
 function fmtCurrency(value: number, currency: string): string {
@@ -69,6 +100,7 @@ function buildInvoiceCopy(
   invoice: Invoice,
   company: Pick<Company, 'name' | 'defaultCurrency'>,
   template: InvoiceTemplate | null,
+  qrDataUrl: string | null,
   copyLabel?: string
 ): any[] {
   const displayStatus = computeDisplayStatus(invoice).toUpperCase();
@@ -151,12 +183,27 @@ function buildInvoiceCopy(
     });
   }
 
-  // ----- Company name + header band (NEW) -----
-  content.push({ text: company.name, style: 'companyHeader' });
+  // ----- Top section: company info (left) + optional UPI QR (top-right) -----
+  // When a QR is rendered, the company info and the QR live inside a single
+  // `columns` element so pdfmake constrains the text to the left column and
+  // they can never overlap. When no QR is rendered, we keep the original
+  // top-to-bottom layout — preserves byte-identity for tenants without UPI.
   const headerBand = renderHeaderBand(template);
-  if (headerBand) content.push(headerBand);
+  const companyStack: any[] = [{ text: company.name, style: 'companyHeader' }];
+  if (headerBand) companyStack.push(headerBand);
+  companyStack.push({ text: `Invoice ${invoice.number}`, style: 'invoiceHeader' });
 
-  content.push({ text: `Invoice ${invoice.number}`, style: 'invoiceHeader' });
+  if (qrDataUrl) {
+    content.push({
+      columns: [
+        { stack: companyStack, width: '*' },
+        { stack: renderQrCard(qrDataUrl), width: 80, alignment: 'right' }
+      ],
+      columnGap: 8
+    });
+  } else {
+    for (const node of companyStack) content.push(node);
+  }
 
   // Bill-to + dates as a single vertical stack (each copy is too narrow to
   // split into two sub-columns — see design Decision 4).
@@ -204,6 +251,7 @@ function buildInvoiceCopy(
   // ----- Footer band: Bank Details (left) | Signature (right) -----
   // Renders only when a template document exists. The signature column always
   // shows when there's a template, with default "Authorized Signatory" text.
+  // (The UPI QR moved to the top-right corner — see the top section above.)
   const footerBand = renderFooterBand(template, company);
   if (footerBand) content.push(footerBand);
 
@@ -343,6 +391,20 @@ function renderFooterBand(
 }
 
 /**
+ * UPI QR card rendered in the top-right corner of each invoice copy.
+ * Returns an array of pdfmake nodes suitable for use as a `stack`. Caller is
+ * responsible for placing it inside a column with a fixed width so it does
+ * NOT overlap with the company info on its left.
+ */
+function renderQrCard(qrDataUrl: string): any[] {
+  return [
+    { text: 'Scan to pay', fontSize: 7, bold: true, alignment: 'right', margin: [0, 0, 0, 2] },
+    { image: qrDataUrl, width: 72, height: 72, alignment: 'right' },
+    { text: 'UPI', fontSize: 6, color: '#888', alignment: 'right', margin: [0, 1, 0, 0] }
+  ];
+}
+
+/**
  * Disclaimer: small italic text spanning the full copy width. Returns `null`
  * when no disclaimer is configured.
  */
@@ -363,7 +425,8 @@ function renderDisclaimer(template: InvoiceTemplate | null): any | null {
 function buildInvoiceDocDefinition(
   invoice: Invoice,
   company: Pick<Company, 'name' | 'defaultCurrency'>,
-  template: InvoiceTemplate | null
+  template: InvoiceTemplate | null,
+  qrDataUrl: string | null
 ): TDocumentDefinitions {
   return {
     pageOrientation: 'landscape',
@@ -390,8 +453,8 @@ function buildInvoiceDocDefinition(
     content: [
       {
         columns: [
-          { stack: buildInvoiceCopy(invoice, company, template, 'ORIGINAL FOR RECIPIENT'), width: '*' },
-          { stack: buildInvoiceCopy(invoice, company, template, 'DUPLICATE FOR SUPPLIER'), width: '*' }
+          { stack: buildInvoiceCopy(invoice, company, template, qrDataUrl, 'ORIGINAL FOR RECIPIENT'), width: '*' },
+          { stack: buildInvoiceCopy(invoice, company, template, qrDataUrl, 'DUPLICATE FOR SUPPLIER'), width: '*' }
         ],
         columnGap: COLUMN_GAP
       }

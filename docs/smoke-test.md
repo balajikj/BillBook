@@ -53,6 +53,18 @@ In a browser:
    - Click **Save**. Confirm the "Saved." indicator appears and the form goes pristine.
    - Click **Revert** — confirm the form re-loads the saved values (no diff).
 
+3b. **Edit company name and currency (added by `admin-company-settings`)**:
+   - Still on the Profile page, scroll to the **Company** section at the top.
+   - Verify the **Code** and **Status** fields are read-only and labelled "Set by platform admin." Confirm they show `acme-co` and `active`.
+   - Verify the **Name** field is pre-populated with `Acme Co.` (set by super admin at creation).
+   - Verify the **Default currency** field is pre-populated with `USD` and that typing `inr` auto-uppercases to `INR`.
+   - **Negative tests**: clear the **Name** field — `Save` disables and an inline `Required, 1–120 characters.` error appears. Type `usd!` into **Default currency** — `Save` disables with inline `Three uppercase letters, e.g. USD.` error.
+   - Restore valid values: Name = `Acme Trading Co.`, Default currency = `INR`. Save. Confirm the "Saved." indicator.
+   - Click **Revert** — the form re-loads the saved values (now `Acme Trading Co.` / `INR`, no diff).
+   - Open an existing invoice and click **Download PDF** — confirm the new company name appears in the header of BOTH copies. (Existing invoices keep their snapshotted currency; only the on-screen company-name display reflects the rename in real time.)
+   - Click **New invoice** — confirm the **Currency** field on the new-invoice form defaults to `INR` (the new default).
+   - For symmetry with later steps, revert the rename + currency back to `Acme Co.` / `USD` before continuing.
+
 4. **Non-admin path**:
    - Sign out. Sign in as `bob@local.test` (still through `acme-co`).
    - You land on `/app/invoices`. Click "New invoice" — Globex is in the dropdown, "Consulting hour" is in the product picker. Create an invoice with 2 hours.
@@ -73,6 +85,9 @@ In a browser:
    - Verify the **Grand Total** panel reads ₹1227 and the **Amount in words** shows "Rupees One Thousand Two Hundred Twenty Seven Only.".
    - Save. On the detail page, confirm the totals card shows Subtotal / CGST / SGST / Other Charges / Round Off / Grand Total and the amount in words.
    - Click **Download PDF**. Open the PDF and verify: the Bill-to block has shop name + full address + GSTIN + phone; the line items table includes the HSN/SAC column with `6109`; the totals block shows CGST 9% / SGST 9% / Other Charges / Round Off / Grand Total; the "Amount in words" footer appears.
+   - **UPI QR (added by `invoice-upi-qr`)**: confirm a square QR (~25 mm) appears in the Bank Details column of BOTH copies with a `Scan to pay` caption above it. Scan it with any UPI app (GPay, PhonePe, BHIM) — the resolved screen MUST pre-fill payee `acme@hdfcbank`, payee name `Acme Co.` (or current company name), amount `1227` (the grand total, no currency symbol, no `.00`), and transaction note containing the invoice number. Cancel before paying.
+   - **QR negative test (currency)**: on the older legacy invoice from step 4 (created with `currency: USD`), download its PDF — confirm NO QR is rendered (no `Scan to pay` caption, no image) since UPI is INR-only.
+   - **QR also renders on PAID invoices**: mark the GST INR invoice **Paid** and download again — confirm the QR is STILL present on the paid copy. (Paying invoices keep the QR for the recipient's reference; status is intentionally not a gate.)
    - **Layout (current: `pdf-portrait-side-by-side`)**: confirm the PDF is **portrait** A4 with two identical copies of the invoice on a single page — **left copy and right copy** — separated by a **vertical dashed line down the centre of the page**. Body text is 8pt; all amounts/dates/numbers match the on-screen detail view exactly. The PDF must be a single page (no overflow onto a second page). Inside each copy, the Bill-to fields and the invoice date / due date / status render as a single vertical stack (not two side-by-side sub-columns).
    - Go back to the older invoice from step 4 (legacy, no GST) — confirm its detail page still shows a single Subtotal/Total line, and its PDF also uses the new portrait side-by-side layout (two copies, vertical dashed cut line) but with the legacy Subtotal/Total block (no CGST/SGST/Amount-in-words) inside each copy.
 

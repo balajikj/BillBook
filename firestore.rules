@@ -47,16 +47,36 @@ service cloud.firestore {
           && request.resource.data.defaultCurrency.size() == 3;
     }
 
+    // Helper: a company-admin's self-service update to their own gate doc.
+    // Tighter than `hasOnlyGateFields` — also pins `status` and enforces a
+    // stricter format on the editable fields (length 1..120 for name; strict
+    // 3-uppercase-letter regex for defaultCurrency). The admin must NOT be
+    // able to change status (super-admin only) or add fields outside the
+    // whitelist. Code/id is immutable in Firestore (it's the document path).
+    function isAdminGateUpdate(cid) {
+      return isTenantAdmin(cid)
+          && request.resource.data.keys().hasOnly(['name', 'status', 'defaultCurrency', 'createdAt', 'updatedAt'])
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.name is string
+          && request.resource.data.name.size() >= 1
+          && request.resource.data.name.size() <= 120
+          && request.resource.data.defaultCurrency is string
+          && request.resource.data.defaultCurrency.matches('^[A-Z]{3}$');
+    }
+
     // ---------- /companies/{cid} (public-readable gate) ----------
     // Anyone (even unauthenticated) may READ the gate document — but it only
     // contains the small set of gate fields (enforced on writes below).
-    // Only super admins may CREATE/UPDATE/DELETE company docs.
+    // Super admins may CREATE/UPDATE/DELETE; company admins of the tenant may
+    // UPDATE the cosmetic fields (name, defaultCurrency) of their own gate doc
+    // — but never status, never the code, and never new fields.
     match /companies/{cid} {
       allow read: if true;
       allow create: if isSuperAdmin()
                     && cid.matches('^[a-z0-9-]{3,32}$')
                     && hasOnlyGateFields();
-      allow update: if isSuperAdmin() && hasOnlyGateFields();
+      allow update: if (isSuperAdmin() && hasOnlyGateFields())
+                    || isAdminGateUpdate(cid);
       allow delete: if isSuperAdmin();
 
       // ---------- private tenant config (admin-only read/write within tenant) ----------
