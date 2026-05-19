@@ -8,7 +8,7 @@ import { CompanyService } from '../../core/services/company.service';
 import { CompanyProfileService } from '../../core/services/company-profile.service';
 import { AuthService } from '../../core/services/auth.service';
 import { PdfService } from '../../core/services/pdf.service';
-import { Invoice, computeDisplayStatus, getDisplayTotal, hasIndiaTotals } from '../../core/models/invoice';
+import { Invoice, InvoiceKind, computeDisplayStatus, getDisplayTotal, getInvoiceKind, hasIndiaTotals } from '../../core/models/invoice';
 import { numberToWords } from '../../core/utils/number-to-words';
 
 @Component({
@@ -20,13 +20,14 @@ import { numberToWords } from '../../core/utils/number-to-words';
 
     @if (invoice$ | async; as inv) {
       <header class="row">
-        <h1>{{ inv.number }}</h1>
+        <h1>{{ kind(inv) === 'purchase' ? 'Purchase bill' : 'Sales bill' }} {{ inv.number }}</h1>
+        <span class="kind-badge" [class]="kind(inv)">{{ kind(inv) === 'purchase' ? 'Purchase' : 'Sales' }}</span>
         <span class="badge" [class]="status(inv)">{{ status(inv) }}</span>
       </header>
 
       <section class="row gap">
         <div class="bill-to">
-          <h3>Bill to</h3>
+          <h3>{{ kind(inv) === 'purchase' ? 'Bill from' : 'Bill to' }}</h3>
           <p class="bill-to-name">{{ inv.customer.name }}</p>
           @if (inv.customer.shopName) { <p>{{ inv.customer.shopName }}</p> }
           @if (inv.customer.fullAddress) { <p class="address">{{ inv.customer.fullAddress }}</p> }
@@ -121,6 +122,9 @@ import { numberToWords } from '../../core/utils/number-to-words';
     .badge.paid { background: #d3f4d3; color: #1e6f1e; }
     .badge.pending { background: #fff1c1; color: #6a5a00; }
     .badge.overdue { background: #f4d3d3; color: #6f1e1e; }
+    .kind-badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; text-transform: uppercase; }
+    .kind-badge.sales { background: #e3f0ff; color: #1e3a8a; }
+    .kind-badge.purchase { background: #f3e8ff; color: #5b21b6; }
     .right { text-align: right; margin: 4px 0; }
     .totals-card { margin: 12px 0 16px auto; max-width: 480px; padding: 12px 16px; border: 1px solid #b8d4ff; background: #f0f6ff; border-radius: 6px; }
     .totals-card .row-line { display: flex; justify-content: space-between; margin: 2px 0; }
@@ -157,6 +161,10 @@ export class InvoiceDetailComponent {
 
   status(inv: Invoice): string {
     return computeDisplayStatus(inv);
+  }
+
+  kind(inv: Invoice): InvoiceKind {
+    return getInvoiceKind(inv);
   }
 
   hasIndia(inv: Invoice): boolean {

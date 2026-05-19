@@ -5,9 +5,10 @@ import { FormControl, FormGroup, ReactiveFormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { switchMap } from 'rxjs';
 import { InvoiceService, InvoiceListOptions } from '../../core/services/invoice.service';
-import { computeDisplayStatus } from '../../core/models/invoice';
+import { computeDisplayStatus, getInvoiceKind, Invoice, InvoiceKind } from '../../core/models/invoice';
 
 type StatusFilter = '' | 'paid' | 'pending' | 'overdue';
+type KindFilter = '' | InvoiceKind;
 
 @Component({
   selector: 'app-invoice-list',
@@ -20,6 +21,13 @@ type StatusFilter = '' | 'paid' | 'pending' | 'overdue';
     </header>
 
     <form [formGroup]="filterForm" class="filters">
+      <label>Kind
+        <select formControlName="kind">
+          <option value="">All</option>
+          <option value="sales">Sales</option>
+          <option value="purchase">Purchase</option>
+        </select>
+      </label>
       <label>Status
         <select formControlName="status">
           <option value="">All</option>
@@ -33,11 +41,12 @@ type StatusFilter = '' | 'paid' | 'pending' | 'overdue';
     </form>
 
     <table class="grid">
-      <thead><tr><th>Number</th><th>Customer</th><th>Total</th><th>Status</th><th>Issued</th><th>Due</th></tr></thead>
+      <thead><tr><th>Number</th><th>Kind</th><th>Customer / Vendor</th><th>Total</th><th>Status</th><th>Issued</th><th>Due</th></tr></thead>
       <tbody>
         @for (inv of (invoices$ | async) ?? []; track inv.id) {
           <tr (click)="open(inv.id)">
             <td>{{ inv.number }}</td>
+            <td><span class="kind-badge" [class]="kindFor(inv)">{{ kindLabel(inv) }}</span></td>
             <td>{{ inv.customer.name }}</td>
             <td>{{ inv.total | number:'1.2-2' }} {{ inv.currency }}</td>
             <td><span class="badge" [class]="statusFor(inv)">{{ statusFor(inv) }}</span></td>
@@ -45,7 +54,7 @@ type StatusFilter = '' | 'paid' | 'pending' | 'overdue';
             <td>{{ inv.dueDate.toDate() | date:'mediumDate' }}</td>
           </tr>
         } @empty {
-          <tr><td colspan="6" class="muted">No invoices match.</td></tr>
+          <tr><td colspan="7" class="muted">No invoices match.</td></tr>
         }
       </tbody>
     </table>
@@ -67,6 +76,9 @@ type StatusFilter = '' | 'paid' | 'pending' | 'overdue';
     .badge.paid { background: #d3f4d3; color: #1e6f1e; }
     .badge.pending { background: #fff1c1; color: #6a5a00; }
     .badge.overdue { background: #f4d3d3; color: #6f1e1e; }
+    .kind-badge { padding: 2px 6px; border-radius: 10px; font-size: 11px; }
+    .kind-badge.sales { background: #e3f0ff; color: #1e3a8a; }
+    .kind-badge.purchase { background: #f3e8ff; color: #5b21b6; }
     .muted { color: #888; }
     .small { font-size: 12px; }
   `]
@@ -76,6 +88,7 @@ export class InvoiceListComponent {
   private readonly router = inject(Router);
 
   readonly filterForm = new FormGroup({
+    kind: new FormControl<KindFilter>('', { nonNullable: true }),
     status: new FormControl<StatusFilter>('', { nonNullable: true }),
     fromDate: new FormControl<string>('', { nonNullable: true }),
     toDate: new FormControl<string>('', { nonNullable: true })
@@ -90,6 +103,7 @@ export class InvoiceListComponent {
     this.filterForm.valueChanges.subscribe((v) => {
       const opts: InvoiceListOptions = { pageSize: 25 };
       if (v.status) opts.status = v.status as InvoiceListOptions['status'];
+      if (v.kind === 'sales' || v.kind === 'purchase') opts.kind = v.kind;
       if (v.fromDate) opts.fromDate = new Date(v.fromDate);
       if (v.toDate) opts.toDate = new Date(v.toDate);
       this.filtersSig.set(opts);
@@ -98,6 +112,14 @@ export class InvoiceListComponent {
 
   statusFor(inv: any): string {
     return computeDisplayStatus(inv);
+  }
+
+  kindFor(inv: Invoice): InvoiceKind {
+    return getInvoiceKind(inv);
+  }
+
+  kindLabel(inv: Invoice): string {
+    return getInvoiceKind(inv) === 'purchase' ? 'Purchase' : 'Sales';
   }
 
   open(id: string): void {

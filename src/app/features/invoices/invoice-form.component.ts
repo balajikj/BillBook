@@ -7,7 +7,7 @@ import { ProductService } from '../../core/services/product.service';
 import { InvoiceService } from '../../core/services/invoice.service';
 import { Customer } from '../../core/models/customer';
 import { Product } from '../../core/models/product';
-import { InvoiceLineItem } from '../../core/models/invoice';
+import { InvoiceKind, InvoiceLineItem } from '../../core/models/invoice';
 import { gstPercentValidator, hsnValidator } from '../../core/validators/gst';
 import { computeCgstSgst, computeGrandTotal, roundMoney } from '../../core/utils/invoice-math';
 import { numberToWords } from '../../core/utils/number-to-words';
@@ -17,11 +17,21 @@ import { numberToWords } from '../../core/utils/number-to-words';
   standalone: true,
   imports: [AsyncPipe, DecimalPipe, ReactiveFormsModule],
   template: `
-    <h1>New invoice</h1>
+    <h1>{{ pageHeading() }}</h1>
 
     <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
+      <fieldset class="kind-toggle">
+        <legend>Bill kind</legend>
+        <label>
+          <input type="radio" formControlName="kind" value="sales" /> Sales <span class="muted small">(I am issuing this bill)</span>
+        </label>
+        <label>
+          <input type="radio" formControlName="kind" value="purchase" /> Purchase <span class="muted small">(I received this bill from a supplier)</span>
+        </label>
+      </fieldset>
+
       <div class="row">
-        <label>Customer *
+        <label>{{ counterpartyLabel() }} *
           <select formControlName="customerId" (change)="onCustomerChange()">
             <option value="">— select —</option>
             @for (c of (customers$ | async) ?? []; track c.id) {
@@ -29,10 +39,22 @@ import { numberToWords } from '../../core/utils/number-to-words';
             }
           </select>
         </label>
+        @if (kindValue() === 'purchase') {
+          <label>Supplier bill number *
+            <input formControlName="number" maxlength="64" placeholder="e.g. VEN/2026/4521" />
+            @if (showError(form.controls.number)) {
+              <small class="field-error">Required; 1–64 characters.</small>
+            }
+          </label>
+        } @else {
+          <label>Invoice number
+            <input value="Will be assigned automatically (INV-YYYY-NNNN)" readonly />
+          </label>
+        }
         <label>Currency *
           <input formControlName="currency" maxlength="3" />
         </label>
-        <label>Invoice date *
+        <label>{{ kindValue() === 'purchase' ? 'Bill date' : 'Invoice date' }} *
           <input type="date" formControlName="issueDate" />
         </label>
         <label>Due date *
@@ -42,7 +64,7 @@ import { numberToWords } from '../../core/utils/number-to-words';
 
       @if (selectedCustomer(); as c) {
         <div class="bill-to-card">
-          <h3>Bill to</h3>
+          <h3>{{ kindValue() === 'purchase' ? 'Bill from' : 'Bill to' }}</h3>
           <p class="bill-to-name">{{ c.name }}</p>
           @if (c.shopName) { <p>{{ c.shopName }}</p> }
           @if (c.fullAddress) { <p class="address">{{ c.fullAddress }}</p> }
@@ -128,7 +150,7 @@ import { numberToWords } from '../../core/utils/number-to-words';
 
       @if (error(); as e) { <p class="error">{{ e }}</p> }
       <button type="submit" [disabled]="form.invalid || busy() || lineItems.length === 0">
-        {{ busy() ? 'Creating…' : 'Create invoice' }}
+        {{ busy() ? 'Creating…' : (kindValue() === 'purchase' ? 'Create purchase bill' : 'Create invoice') }}
       </button>
       <button type="button" (click)="cancel()">Cancel</button>
     </form>
@@ -136,6 +158,9 @@ import { numberToWords } from '../../core/utils/number-to-words';
   styles: [`
     h1 { margin: 0 0 12px 0; }
     h3 { margin: 14px 0 6px 0; }
+    .kind-toggle { border: 1px solid #ddd; border-radius: 6px; padding: 8px 12px; margin: 4px 0 12px; background: #fafafa; display: flex; gap: 20px; align-items: center; }
+    .kind-toggle legend { padding: 0 6px; font-size: 12px; color: #555; }
+    .kind-toggle label { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
     .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
     .row label { display: flex; flex-direction: column; font-size: 13px; gap: 4px; }
     .row input, .row select { padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
@@ -190,6 +215,8 @@ export class InvoiceFormComponent {
   });
 
   readonly form = this.fb.nonNullable.group({
+    kind: ['sales' as InvoiceKind, [Validators.required]],
+    number: [''], // only used when kind === 'purchase'; validators applied dynamically
     customerId: ['', [Validators.required]],
     currency: ['INR', [Validators.required, Validators.pattern(/^[A-Z]{3}$/)]],
     issueDate: [new Date().toISOString().slice(0, 10), [Validators.required]],
@@ -200,6 +227,11 @@ export class InvoiceFormComponent {
     roundOff: [0],
     lineItems: this.fb.array<FormGroup>([])
   });
+
+  /** Selected bill kind, exposed as a signal for the template. */
+  readonly kindValue = signal<InvoiceKind>('sales');
+  readonly pageHeading = computed(() => this.kindValue() === 'purchase' ? 'New purchase bill' : 'New sales bill');
+  readonly counterpartyLabel = computed(() => this.kindValue() === 'purchase' ? 'Vendor' : 'Customer');
 
   // Live signals driven by the form. Updated explicitly via recompute() / recomputeAll().
   readonly subtotal = signal(0);
@@ -219,6 +251,19 @@ export class InvoiceFormComponent {
     this.addLine();
     this.customers$.subscribe((cs) => (this.customersCache = cs));
     this.products$.subscribe((ps) => (this.productsCache = ps));
+    // Keep the `kindValue` signal in sync with the form and swap the `number`
+    // field's validators when the user flips the toggle.
+    const numberCtrl = this.form.controls.number;
+    this.form.controls.kind.valueChanges.subscribe((k) => {
+      this.kindValue.set((k as InvoiceKind) ?? 'sales');
+      if (k === 'purchase') {
+        numberCtrl.setValidators([Validators.required, Validators.maxLength(64)]);
+      } else {
+        numberCtrl.setValidators([]);
+        numberCtrl.setValue('', { emitEvent: false });
+      }
+      numberCtrl.updateValueAndValidity({ emitEvent: false });
+    });
   }
 
   get lineItems(): FormArray<FormGroup> {
@@ -320,6 +365,8 @@ export class InvoiceFormComponent {
       };
 
       const res = await this.invoiceSvc.create({
+        kind: v.kind as InvoiceKind,
+        number: v.kind === 'purchase' ? (v.number ?? '').trim() : undefined,
         customer: customerSnapshot,
         lineItems,
         currency: v.currency,

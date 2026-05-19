@@ -6,6 +6,18 @@ export type StoredInvoiceStatus = 'pending' | 'paid';
 // Status as displayed in the UI — `overdue` is derived (not stored).
 export type DisplayInvoiceStatus = StoredInvoiceStatus | 'overdue';
 
+/**
+ * Direction of the bill:
+ *   - `sales`: a bill the tenant ISSUES to a customer (money in). Auto-numbered.
+ *   - `purchase`: a bill the tenant RECEIVED from a supplier (money out).
+ *     The supplier's printed number is stored verbatim — no auto-numbering.
+ *
+ * Legacy invoices created before this field was added do NOT carry it; every
+ * consumer MUST route through `getInvoiceKind(inv)` which returns `'sales'`
+ * for those records (the only kind that existed before this change).
+ */
+export type InvoiceKind = 'sales' | 'purchase';
+
 export interface InvoiceLineItem {
   productId: string | null;  // null if the line item was free-form
   description: string;
@@ -40,6 +52,9 @@ export interface Invoice {
   otherCharges?: number | null;
   roundOff?: number | null;
   grandTotal?: number | null;
+  // Sales vs purchase bill direction (added by sales-purchase-bills).
+  // Missing on legacy docs — read via `getInvoiceKind(inv)` which defaults to 'sales'.
+  kind?: InvoiceKind;
 }
 
 // Counter document at /companies/{cid}/counters/invoice
@@ -67,4 +82,14 @@ export function hasIndiaTotals(invoice: Pick<Invoice, 'gstPercent' | 'otherCharg
     (invoice.roundOff != null && invoice.roundOff !== 0) ||
     invoice.grandTotal != null
   );
+}
+
+/**
+ * Central accessor for the bill kind. ALWAYS use this instead of touching
+ * `inv.kind` directly so legacy docs (written before the field existed) reliably
+ * read as `'sales'`. Code-review rule: any new `.kind` access on an Invoice goes
+ * through this function.
+ */
+export function getInvoiceKind(invoice: Pick<Invoice, 'kind'>): InvoiceKind {
+  return invoice.kind ?? 'sales';
 }

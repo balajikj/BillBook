@@ -91,6 +91,22 @@ In a browser:
    - **Layout (current: `pdf-portrait-side-by-side`)**: confirm the PDF is **portrait** A4 with two identical copies of the invoice on a single page — **left copy and right copy** — separated by a **vertical dashed line down the centre of the page**. Body text is 8pt; all amounts/dates/numbers match the on-screen detail view exactly. The PDF must be a single page (no overflow onto a second page). Inside each copy, the Bill-to fields and the invoice date / due date / status render as a single vertical stack (not two side-by-side sub-columns).
    - Go back to the older invoice from step 4 (legacy, no GST) — confirm its detail page still shows a single Subtotal/Total line, and its PDF also uses the new portrait side-by-side layout (two copies, vertical dashed cut line) but with the legacy Subtotal/Total block (no CGST/SGST/Amount-in-words) inside each copy.
 
+5b. **Create a purchase bill (added by `sales-purchase-bills`)**:
+   - Still signed in as Alice. Click **New invoice**. Flip the **Bill kind** toggle to **Purchase**.
+   - Verify the heading reads `New purchase bill`, the counterparty label reads `Vendor`, and the number field becomes a required text input (`Supplier bill number`).
+   - **Negative test**: try saving with the number blank — Save is disabled and an inline `Required; 1–64 characters.` error appears.
+   - Pick `Globex Traders` (used here as the vendor). Type number `VEN/2026/4521`. Add a line item: `Office supplies`, qty 1, unit price `2000`, GST `18`.
+   - Save. On the detail page, confirm the heading reads `Purchase bill VEN/2026/4521`, the kind badge reads `PURCHASE`, the counterparty section header reads `Bill from`, and the totals match.
+   - In the invoice list, set the **Kind** filter to `Purchase` — verify only the new bill appears. Set to `Sales` — verify only earlier sales invoices appear. Reset to `All` — both visible with a `Sales` / `Purchase` badge in each row.
+
+5c. **Verify dashboard segregation (added by `sales-purchase-bills`)**:
+   - Open `/app/dashboard`. Verify three card groups render top-to-bottom: **Sales (last 90 days)**, **Purchase (last 90 days)**, **GST Summary (last 90 days, INR only)**.
+   - Sales group: Revenue reflects only the older paid sales invoices. Paid / Pending / Overdue counts segment sales only.
+   - Purchase group: Paid out is `0` (the new purchase bill is still pending). Pending count is `1`.
+   - GST Summary: Output GST sums the CGST+SGST on sales invoices in the window. Input GST shows `180.00` (₹2000 × 18% on the new purchase bill). Net liability = Output − Input. If positive, card is styled with the warning (red-tinged) palette and labelled `payable`; if negative, card uses the info (green-tinged) palette and labelled `ITC available`; if zero, `Balanced`.
+   - A small italic caveat below the GST cards reads "Rolling 90-day INR-only estimate. Not a tax filing report."
+   - Mark the purchase bill as **Paid**. Refresh the dashboard. Purchase Paid count moves to `1` and the Paid out card reflects ₹2360 (2000 + 360 GST) in INR.
+
 6. **Tenant isolation check** (optional):
    - Super admin creates a second company `other-co` with admin `eve@local.test`.
    - Sign in as Eve. Verify no Acme Co. data is visible anywhere.

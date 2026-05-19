@@ -2,17 +2,42 @@ import { Injectable, inject } from '@angular/core';
 import {
   Firestore, Timestamp, collection, getDocs, limit as fsLimit, orderBy, query, where
 } from '@angular/fire/firestore';
-import { Invoice } from '../models/invoice';
+import { Invoice, getDisplayTotal, getInvoiceKind } from '../models/invoice';
 import { AuthService } from './auth.service';
 
-export interface DashboardSummary {
-  revenueByCurrency: Record<string, number>;
+/** Per-kind metrics over the dashboard window. */
+export interface KindMetrics {
+  /** Sum of (grandTotal || total) over paid invoices in this kind, grouped by currency. */
+  totalByCurrency: Record<string, number>;
   paidCount: number;
   pendingNotOverdueCount: number;
   overdueCount: number;
+}
+
+/** GST summary numbers — INR only, all statuses, rolling window. */
+export interface GstSummary {
+  /** Sum of (cgst+sgst) on sales invoices in INR with gstPercent > 0. */
+  outputInr: number;
+  /** Sum of (cgst+sgst) on purchase invoices in INR with gstPercent > 0. */
+  inputInr: number;
+  /** outputInr - inputInr. Positive = payable, negative = ITC available, zero = balanced. */
+  netInr: number;
+}
+
+export interface DashboardSummary {
+  sales: KindMetrics;
+  purchase: KindMetrics;
+  gst: GstSummary;
   recent: Invoice[];
   windowDays: number;
 }
+
+const EMPTY_KIND_METRICS = (): KindMetrics => ({
+  totalByCurrency: {},
+  paidCount: 0,
+  pendingNotOverdueCount: 0,
+  overdueCount: 0
+});
 
 @Injectable({ providedIn: 'root' })
 export class DashboardService {
@@ -26,40 +51,65 @@ export class DashboardService {
     const since = new Date();
     since.setDate(since.getDate() - windowDays);
     const sinceTs = Timestamp.fromDate(since);
-    const now = new Date();
-    const nowTs = Timestamp.fromDate(now);
+    const nowMillis = Date.now();
 
     const col = collection(this.db, `companies/${cid}/invoices`);
 
-    // Paid revenue (bounded by 90 days).
+    const sales = EMPTY_KIND_METRICS();
+    const purchase = EMPTY_KIND_METRICS();
+    const gst: GstSummary = { outputInr: 0, inputInr: 0, netInr: 0 };
+
+    // ----- 1. Paid invoices (revenue / paid-out + paid counts) -----
     const paidSnap = await getDocs(
       query(col, where('status', '==', 'paid'), where('createdAt', '>=', sinceTs))
     );
-    const revenueByCurrency: Record<string, number> = {};
-    let paidCount = 0;
     paidSnap.forEach((d) => {
       const inv = d.data() as Invoice;
-      revenueByCurrency[inv.currency] = (revenueByCurrency[inv.currency] ?? 0) + inv.total;
-      paidCount += 1;
+      const bucket = getInvoiceKind(inv) === 'purchase' ? purchase : sales;
+      const amount = getDisplayTotal(inv);
+      bucket.totalByCurrency[inv.currency] = (bucket.totalByCurrency[inv.currency] ?? 0) + amount;
+      bucket.paidCount += 1;
     });
 
-    // Pending in window — split into overdue vs not.
+    // ----- 2. Pending invoices (overdue split) -----
     const pendingSnap = await getDocs(
       query(col, where('status', '==', 'pending'), where('createdAt', '>=', sinceTs))
     );
-    let pendingNotOverdueCount = 0;
-    let overdueCount = 0;
     pendingSnap.forEach((d) => {
       const inv = d.data() as Invoice;
-      if (inv.dueDate.toMillis() < nowTs.toMillis()) overdueCount += 1;
-      else pendingNotOverdueCount += 1;
+      const bucket = getInvoiceKind(inv) === 'purchase' ? purchase : sales;
+      if (inv.dueDate.toMillis() < nowMillis) bucket.overdueCount += 1;
+      else bucket.pendingNotOverdueCount += 1;
     });
 
-    // Recent invoices (no time-window restriction — bounded by limit(10)).
+    // ----- 3. GST sums (INR + gstPercent > 0, all statuses) -----
+    // GST liability accrues at invoice-issue time regardless of payment, so we
+    // include every invoice in the window with gstPercent > 0 and currency INR.
+    const gstSnap = await getDocs(
+      query(col, where('gstPercent', '>', 0), where('createdAt', '>=', sinceTs))
+    );
+    gstSnap.forEach((d) => {
+      const inv = d.data() as Invoice;
+      if (inv.currency !== 'INR') return;
+      const cgst = Number(inv.cgstAmount ?? 0);
+      const sgst = Number(inv.sgstAmount ?? 0);
+      const gstAmount = cgst + sgst;
+      if (getInvoiceKind(inv) === 'purchase') gst.inputInr += gstAmount;
+      else gst.outputInr += gstAmount;
+    });
+    gst.netInr = roundMoney(gst.outputInr - gst.inputInr);
+    gst.outputInr = roundMoney(gst.outputInr);
+    gst.inputInr = roundMoney(gst.inputInr);
+
+    // ----- 4. Recent invoices (mixed, newest 10) -----
     const recentSnap = await getDocs(query(col, orderBy('createdAt', 'desc'), fsLimit(10)));
     const recent: Invoice[] = [];
     recentSnap.forEach((d) => recent.push({ id: d.id, ...(d.data() as Omit<Invoice, 'id'>) }));
 
-    return { revenueByCurrency, paidCount, pendingNotOverdueCount, overdueCount, recent, windowDays };
+    return { sales, purchase, gst, recent, windowDays };
   }
+}
+
+function roundMoney(n: number): number {
+  return Math.round(n * 100) / 100;
 }

@@ -1,6 +1,6 @@
 # BillEasy
 
-Zero-cost, multi-tenant billing application built on the Firebase free (Spark) tier. Angular 21 SPA + Cloud Firestore + Firebase Auth + a single Cloud Function for privileged claims management. PDF invoices are generated client-side with `pdfmake`. Supports India-style **GST tax invoices** with CGST/SGST split, HSN/SAC codes, other charges, round-off, and grand-total-in-words rendering. Company admins configure a per-tenant **invoice profile** (header contact details, bank/UPI, signatory, T&C, disclaimer) under `/app/profile`, which the PDF generator applies to every invoice. When a UPI ID is configured, INR invoices render a scannable **UPI payment QR code** in the top-right corner of each copy with the payee, amount, and invoice number pre-filled.
+Zero-cost, multi-tenant billing application built on the Firebase free (Spark) tier. Angular 21 SPA + Cloud Firestore + Firebase Auth + a single Cloud Function for privileged claims management. PDF invoices are generated client-side with `pdfmake`. Supports India-style **GST tax invoices** with CGST/SGST split, HSN/SAC codes, other charges, round-off, and grand-total-in-words rendering. Company admins configure a per-tenant **invoice profile** (header contact details, bank/UPI, signatory, T&C, disclaimer) under `/app/profile`, which the PDF generator applies to every invoice. When a UPI ID is configured, INR invoices render a scannable **UPI payment QR code** in the top-right corner of each copy with the payee, amount, and invoice number pre-filled. Bills now distinguish **sales** (auto-numbered `INV-YYYY-NNNN`) from **purchase** bills (user-typed supplier number); the dashboard segregates metrics by kind and shows a rolling **GST Summary** with Output, Input, and Net liability.
 
 ## Non-goals (call-outs for future contributors)
 
@@ -8,6 +8,7 @@ Zero-cost, multi-tenant billing application built on the Firebase free (Spark) t
 - **Single invoice template per company** — no multi-template picker on the invoice form.
 - **Invoice profile values apply to the PDF only** — not to the on-screen invoice detail view.
 - **Company code and status remain super-admin-only** — company admins can edit their company's display name and default currency, but the code (login key) and active/inactive status stay with the platform admin.
+- **Dashboard GST Summary is a rolling 90-day INR-only estimate**, not a filing-grade GSTR-3B / GSTR-1 / GSTR-2A report. ITC carry-forward across months is not modelled.
 
 ## Repository layout
 

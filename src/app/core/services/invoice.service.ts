@@ -1,22 +1,33 @@
 import { Injectable, inject } from '@angular/core';
 import {
   Firestore, Timestamp, collection, collectionData, deleteDoc, doc, docData,
-  getDoc, limit as fsLimit, orderBy, query, runTransaction, serverTimestamp, updateDoc, where
+  getDoc, limit as fsLimit, orderBy, query, runTransaction, serverTimestamp, setDoc, updateDoc, where
 } from '@angular/fire/firestore';
 import { Observable } from 'rxjs';
-import { Invoice, InvoiceLineItem, StoredInvoiceStatus } from '../models/invoice';
+import { Invoice, InvoiceKind, InvoiceLineItem, StoredInvoiceStatus } from '../models/invoice';
 import { CustomerSnapshot } from '../models/customer';
 import { AuthService } from './auth.service';
 import { computeCgstSgst, computeGrandTotal, roundMoney } from '../utils/invoice-math';
 
 export interface InvoiceListOptions {
   status?: StoredInvoiceStatus | 'overdue';
+  /**
+   * Filter by bill direction. Note: legacy invoices that have no `kind` field
+   * stored will NOT match a `kind: 'sales'` filter via the where() query (since
+   * the field is absent on the document). Callers that need legacy-inclusive
+   * "sales-only" results should leave this unset and bucket client-side.
+   */
+  kind?: InvoiceKind;
   fromDate?: Date;
   toDate?: Date;
   pageSize?: number;
 }
 
 export interface CreateInvoiceArgs {
+  /** Bill direction. Sales auto-numbers; purchase uses the supplier's printed number. */
+  kind: InvoiceKind;
+  /** Required when `kind === 'purchase'`. Stored verbatim as the invoice's `number`. */
+  number?: string;
   customer: CustomerSnapshot;
   lineItems: InvoiceLineItem[];
   currency: string;
@@ -58,6 +69,12 @@ export class InvoiceService {
     } else {
       constraints.push(orderBy('createdAt', 'desc'));
     }
+    if (opts.kind === 'sales' || opts.kind === 'purchase') {
+      // Heads up: legacy docs without `kind` will NOT match `kind == 'sales'`
+      // via Firestore where(). Acceptable for the list page since "All" is
+      // available and most users will create new sales invoices going forward.
+      constraints.push(where('kind', '==', opts.kind));
+    }
     if (opts.fromDate) constraints.push(where('createdAt', '>=', Timestamp.fromDate(opts.fromDate)));
     if (opts.toDate) constraints.push(where('createdAt', '<=', Timestamp.fromDate(opts.toDate)));
     constraints.push(fsLimit(opts.pageSize ?? 25));
@@ -68,7 +85,13 @@ export class InvoiceService {
     return docData(doc(this.db, this.invoicesPath(), id), { idField: 'id' }) as Observable<Invoice | undefined>;
   }
 
-  /** Transactionally allocate the next invoice number and create the invoice. */
+  /**
+   * Create an invoice. The path branches on `args.kind`:
+   *   - `sales`   — transactionally allocates the next `INV-YYYY-NNNN` from the
+   *                 per-tenant counter and writes the invoice with that number.
+   *   - `purchase` — uses `args.number` (the supplier's printed bill number)
+   *                  verbatim and writes the invoice WITHOUT touching the counter.
+   */
   async create(args: CreateInvoiceArgs): Promise<{ id: string; number: string }> {
     const cid = this.cid();
     const uid = this.auth.user()!.uid;
@@ -83,7 +106,49 @@ export class InvoiceService {
     const hasIndiaFields = gstPercent > 0 || otherCharges !== 0 || roundOff !== 0;
     const total = hasIndiaFields ? grandTotal : subtotal;
     const year = new Date().getFullYear();
+    const kind: InvoiceKind = args.kind ?? 'sales';
 
+    /** Build the fields common to both sales and purchase persistence. */
+    const baseDoc = (number: string): Record<string, unknown> => {
+      const out: Record<string, unknown> = {
+        number,
+        kind,
+        customer: args.customer,
+        lineItems: args.lineItems,
+        subtotal,
+        total,
+        currency: args.currency,
+        status: 'pending' as StoredInvoiceStatus,
+        issueDate: Timestamp.fromDate(args.issueDate),
+        dueDate: Timestamp.fromDate(args.dueDate),
+        paidAt: null,
+        notes: args.notes ?? '',
+        createdBy: uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+      if (hasIndiaFields) {
+        out['gstPercent'] = gstPercent;
+        out['cgstAmount'] = cgst;
+        out['sgstAmount'] = sgst;
+        out['otherCharges'] = otherCharges;
+        out['roundOff'] = roundOff;
+        out['grandTotal'] = grandTotal;
+      }
+      return out;
+    };
+
+    // ----- Purchase: caller supplies the supplier's bill number; no counter -----
+    if (kind === 'purchase') {
+      const supplied = (args.number ?? '').toString().trim();
+      if (!supplied) throw new Error('Purchase bill number is required.');
+      if (supplied.length > 64) throw new Error('Purchase bill number must be 64 characters or fewer.');
+      const invoiceRef = doc(collection(this.db, this.invoicesPath()));
+      await setDoc(invoiceRef, baseDoc(supplied));
+      return { id: invoiceRef.id, number: supplied };
+    }
+
+    // ----- Sales: transactional counter increment + auto-number -----
     return await runTransaction(this.db, async (tx) => {
       const counterRef = doc(this.db, `companies/${cid}/counters/invoice`);
       const counterSnap = await tx.get(counterRef);
@@ -101,34 +166,8 @@ export class InvoiceService {
       }
       const number = `INV-${yr}-${String(next).padStart(4, '0')}`;
       tx.set(counterRef, { year: yr, next: next + 1 });
-
       const invoiceRef = doc(collection(this.db, this.invoicesPath()));
-      const doc_: Record<string, unknown> = {
-        number,
-        customer: args.customer,
-        lineItems: args.lineItems,
-        subtotal,
-        total,
-        currency: args.currency,
-        status: 'pending' as StoredInvoiceStatus,
-        issueDate: Timestamp.fromDate(args.issueDate),
-        dueDate: Timestamp.fromDate(args.dueDate),
-        paidAt: null,
-        notes: args.notes ?? '',
-        createdBy: uid,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      };
-      // Persist India GST fields only when meaningful (keep legacy invoices clean).
-      if (hasIndiaFields) {
-        doc_['gstPercent'] = gstPercent;
-        doc_['cgstAmount'] = cgst;
-        doc_['sgstAmount'] = sgst;
-        doc_['otherCharges'] = otherCharges;
-        doc_['roundOff'] = roundOff;
-        doc_['grandTotal'] = grandTotal;
-      }
-      tx.set(invoiceRef, doc_);
+      tx.set(invoiceRef, baseDoc(number));
       return { id: invoiceRef.id, number };
     });
   }
