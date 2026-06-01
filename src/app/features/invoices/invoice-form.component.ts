@@ -10,6 +10,7 @@ import { Product } from '../../core/models/product';
 import { InvoiceKind, InvoiceLineItem } from '../../core/models/invoice';
 import { gstPercentValidator, hsnValidator } from '../../core/validators/gst';
 import { computeCgstSgst, computeGrandTotal, roundMoney } from '../../core/utils/invoice-math';
+import { GST_SLABS } from '../../core/utils/gst-slabs';
 import { numberToWords } from '../../core/utils/number-to-words';
 
 @Component({
@@ -133,16 +134,17 @@ import { numberToWords } from '../../core/utils/number-to-words';
       <section class="totals-block">
         <h3>Tax &amp; Charges</h3>
         <div class="row">
-          <label>GST %
-            <input type="number" min="0" max="50" step="0.01" formControlName="gstPercent" (input)="recomputeAll()" />
-            <small class="muted small">Indian intra-state. Splits as CGST and SGST. Leave 0 for non-GST invoices.</small>
+          <label>GST slab
+            <select formControlName="gstPercent" (change)="recomputeAll()">
+              @for (slab of gstSlabs; track slab.value) {
+                <option [ngValue]="slab.value">{{ slab.label }}</option>
+              }
+            </select>
+            <small class="muted small">Pick the slab that matches the goods/services. Splits as CGST and SGST on the bill.</small>
           </label>
           <span class="kv"><span class="k">CGST ({{ halfGst() | number:'1.0-2' }}%):</span> <span class="v">{{ cgst() | number:'1.2-2' }}</span></span>
           <span class="kv"><span class="k">SGST ({{ halfGst() | number:'1.0-2' }}%):</span> <span class="v">{{ sgst() | number:'1.2-2' }}</span></span>
         </div>
-        @if (showError(form.controls.gstPercent)) {
-          <small class="field-error">GST must be between 0 and 50.</small>
-        }
         <div class="row">
           <label>Other Charges
             <input type="number" min="0" step="0.01" formControlName="otherCharges" (input)="recomputeAll()" />
@@ -263,6 +265,9 @@ export class InvoiceFormComponent {
   readonly kindValue = signal<InvoiceKind>('sales');
   readonly pageHeading = computed(() => this.kindValue() === 'purchase' ? 'New purchase bill' : 'New sales bill');
   readonly counterpartyLabel = computed(() => this.kindValue() === 'purchase' ? 'Vendor' : 'Customer');
+
+  /** GST slab options shown in the dropdown. */
+  readonly gstSlabs = GST_SLABS;
 
   /** Sales-only override flow. Disabled by default; opt-in via the "Override" link. */
   readonly overriding = signal(false);
