@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import {
   Firestore, Timestamp, collection, collectionData, deleteDoc, doc, docData,
-  getDoc, limit as fsLimit, orderBy, query, runTransaction, serverTimestamp, setDoc, updateDoc, where
+  getDoc, getDocs, limit as fsLimit, orderBy, query, runTransaction, serverTimestamp, setDoc, updateDoc, where
 } from '@angular/fire/firestore';
 import { Observable } from 'rxjs';
 import { Invoice, InvoiceKind, InvoiceLineItem, StoredInvoiceStatus } from '../models/invoice';
@@ -86,6 +86,29 @@ export class InvoiceService {
   }
 
   /**
+   * Looks up whether an invoice with the given `number` already exists in the
+   * current tenant. Used by the override-number flow on the new-invoice form
+   * to verify availability before saving.
+   *
+   * Note: there is a small TOCTOU race between this check and the save —
+   * two users could verify the same number concurrently and both save. We
+   * accept that race in MVP; the worst case is two invoices sharing one
+   * number string (cosmetic, not data-corrupting).
+   */
+  async checkNumberAvailable(number: string): Promise<{ available: boolean; existingId?: string }> {
+    const trimmed = (number ?? '').toString().trim();
+    if (!trimmed) return { available: false };
+    const q = query(
+      collection(this.db, this.invoicesPath()),
+      where('number', '==', trimmed),
+      fsLimit(1)
+    );
+    const snap = await getDocs(q);
+    if (snap.empty) return { available: true };
+    return { available: false, existingId: snap.docs[0].id };
+  }
+
+  /**
    * Create an invoice. The path branches on `args.kind`:
    *   - `sales`   — transactionally allocates the next `INV-YYYY-NNNN` from the
    *                 per-tenant counter and writes the invoice with that number.
@@ -148,7 +171,24 @@ export class InvoiceService {
       return { id: invoiceRef.id, number: supplied };
     }
 
-    // ----- Sales: transactional counter increment + auto-number -----
+    // ----- Sales OVERRIDE: caller supplied a number (e.g. reusing a number
+    // whose old bill was deleted/corrected). Skip the counter — overriding
+    // doesn't move the auto-number cursor. Re-check availability immediately
+    // before write to narrow the TOCTOU window. -----
+    if (kind === 'sales' && args.number !== undefined && args.number !== null && args.number !== '') {
+      const supplied = (args.number ?? '').toString().trim();
+      if (!supplied) throw new Error('Override bill number is required when override is active.');
+      if (supplied.length > 64) throw new Error('Bill number must be 64 characters or fewer.');
+      const recheck = await this.checkNumberAvailable(supplied);
+      if (!recheck.available) {
+        throw new Error(`Bill number "${supplied}" is already in use by another invoice.`);
+      }
+      const invoiceRef = doc(collection(this.db, this.invoicesPath()));
+      await setDoc(invoiceRef, baseDoc(supplied));
+      return { id: invoiceRef.id, number: supplied };
+    }
+
+    // ----- Sales (default): transactional counter increment + auto-number -----
     return await runTransaction(this.db, async (tx) => {
       const counterRef = doc(this.db, `companies/${cid}/counters/invoice`);
       const counterSnap = await tx.get(counterRef);

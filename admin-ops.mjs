@@ -160,6 +160,19 @@ async function createCompanyUser(code, email, displayName) {
   console.log(`Password reset link:\n${link}`);
 }
 
+async function resetPassword(email) {
+  assert(email?.includes('@'), 'valid email required');
+  // Sanity: confirm the user actually exists so a typo doesn't silently mint
+  // a worthless link.
+  try {
+    await auth.getUserByEmail(email);
+  } catch {
+    throw new Error(`No Firebase Auth user found for ${email}`);
+  }
+  const link = await auth.generatePasswordResetLink(email);
+  console.log(`Password reset link for ${email}:\n${link}`);
+}
+
 async function removeCompanyUser(code, uid) {
   assert(COMPANY_CODE.test(code), 'bad company code');
   assert(uid?.length, 'uid required');
@@ -182,6 +195,7 @@ function usage() {
     '  create-company-admin <code> <email> <"display name">',
     '  create-company-user <code> <email> <"display name">',
     '  remove-company-user <code> <uid>',
+    '  reset-password <email>                          (regenerate a one-shot reset link)',
     '',
     'Connection:',
     '  Production : requires ./service-account.json next to this script.',
@@ -198,6 +212,7 @@ const ops = {
   'create-company-admin': () => createCompanyAdmin(rest[0], rest[1], rest[2]),
   'create-company-user': () => createCompanyUser(rest[0], rest[1], rest[2]),
   'remove-company-user': () => removeCompanyUser(rest[0], rest[1]),
+  'reset-password': () => resetPassword(rest[0]),
 };
 if (!ops[cmd]) usage();
 

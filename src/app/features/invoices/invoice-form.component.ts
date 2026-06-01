@@ -48,7 +48,32 @@ import { numberToWords } from '../../core/utils/number-to-words';
           </label>
         } @else {
           <label>Invoice number
-            <input value="Will be assigned automatically (INV-YYYY-NNNN)" readonly />
+            @if (!overriding()) {
+              <input value="Will be assigned automatically (INV-YYYY-NNNN)" readonly />
+              <small class="muted small">
+                Need to reuse a number (e.g. the old bill was wrong and deleted)?
+                <button type="button" class="link-btn" (click)="enableOverride()">Override</button>
+              </small>
+            } @else {
+              <div class="override-row">
+                <input formControlName="number" maxlength="64" placeholder="e.g. INV-2026-0042" (input)="onNumberEdited()" />
+                <button type="button" class="check-btn" (click)="verifyNumber()"
+                        [disabled]="!form.controls.number.value || verifyState() === 'checking'">
+                  {{ verifyState() === 'checking' ? 'Checking…' : 'Check availability' }}
+                </button>
+                <button type="button" class="link-btn" (click)="cancelOverride()">Cancel override</button>
+              </div>
+              @if (showError(form.controls.number)) {
+                <small class="field-error">Required; 1–64 characters.</small>
+              }
+              @if (verifyState() === 'available') {
+                <small class="ok small">✓ Available — you can save this invoice.</small>
+              } @else if (verifyState() === 'taken') {
+                <small class="field-error">Already in use by another invoice. Pick a different number.</small>
+              } @else if (verifyState() === 'idle' && form.controls.number.value) {
+                <small class="muted small">Click <strong>Check availability</strong> before saving.</small>
+              }
+            }
           </label>
         }
         <label>Currency *
@@ -149,7 +174,7 @@ import { numberToWords } from '../../core/utils/number-to-words';
       </section>
 
       @if (error(); as e) { <p class="error">{{ e }}</p> }
-      <button type="submit" [disabled]="form.invalid || busy() || lineItems.length === 0">
+      <button type="submit" [disabled]="form.invalid || busy() || lineItems.length === 0 || !canSubmit()">
         {{ busy() ? 'Creating…' : (kindValue() === 'purchase' ? 'Create purchase bill' : 'Create invoice') }}
       </button>
       <button type="button" (click)="cancel()">Cancel</button>
@@ -161,6 +186,12 @@ import { numberToWords } from '../../core/utils/number-to-words';
     .kind-toggle { border: 1px solid #ddd; border-radius: 6px; padding: 8px 12px; margin: 4px 0 12px; background: #fafafa; display: flex; gap: 20px; align-items: center; }
     .kind-toggle legend { padding: 0 6px; font-size: 12px; color: #555; }
     .kind-toggle label { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+    .link-btn { background: transparent; color: #1e6fff; border: 0; padding: 0; margin: 0 0 0 4px; text-decoration: underline; cursor: pointer; font-size: inherit; }
+    .check-btn { background: #fff; color: #1e6fff; border: 1px solid #1e6fff; padding: 6px 10px; border-radius: 4px; cursor: pointer; }
+    .check-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+    .override-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .override-row input { flex: 1; min-width: 180px; }
+    .ok { color: #1e6f1e; }
     .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
     .row label { display: flex; flex-direction: column; font-size: 13px; gap: 4px; }
     .row input, .row select { padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
@@ -233,6 +264,12 @@ export class InvoiceFormComponent {
   readonly pageHeading = computed(() => this.kindValue() === 'purchase' ? 'New purchase bill' : 'New sales bill');
   readonly counterpartyLabel = computed(() => this.kindValue() === 'purchase' ? 'Vendor' : 'Customer');
 
+  /** Sales-only override flow. Disabled by default; opt-in via the "Override" link. */
+  readonly overriding = signal(false);
+  /** Verification state of the typed override number. Resets to `idle` whenever
+   *  the user edits the number after a check has run. */
+  readonly verifyState = signal<'idle' | 'checking' | 'available' | 'taken'>('idle');
+
   // Live signals driven by the form. Updated explicitly via recompute() / recomputeAll().
   readonly subtotal = signal(0);
   readonly gstPercentValue = signal(0);
@@ -256,6 +293,9 @@ export class InvoiceFormComponent {
     const numberCtrl = this.form.controls.number;
     this.form.controls.kind.valueChanges.subscribe((k) => {
       this.kindValue.set((k as InvoiceKind) ?? 'sales');
+      // Reset sales-override state when switching kinds.
+      this.overriding.set(false);
+      this.verifyState.set('idle');
       if (k === 'purchase') {
         numberCtrl.setValidators([Validators.required, Validators.maxLength(64)]);
       } else {
@@ -264,6 +304,51 @@ export class InvoiceFormComponent {
       }
       numberCtrl.updateValueAndValidity({ emitEvent: false });
     });
+  }
+
+  /** Enable the sales override flow. Adds required/maxLength validators to the
+   *  number field and primes the verify state machine. */
+  enableOverride(): void {
+    this.overriding.set(true);
+    this.verifyState.set('idle');
+    const c = this.form.controls.number;
+    c.setValidators([Validators.required, Validators.maxLength(64)]);
+    c.setValue('', { emitEvent: false });
+    c.updateValueAndValidity({ emitEvent: false });
+  }
+
+  cancelOverride(): void {
+    this.overriding.set(false);
+    this.verifyState.set('idle');
+    const c = this.form.controls.number;
+    c.setValidators([]);
+    c.setValue('', { emitEvent: false });
+    c.updateValueAndValidity({ emitEvent: false });
+  }
+
+  /** Called from `(input)` on the override number field. Any edit invalidates
+   *  a previous "available" verification — the user must check again. */
+  onNumberEdited(): void {
+    if (this.verifyState() !== 'idle') this.verifyState.set('idle');
+  }
+
+  async verifyNumber(): Promise<void> {
+    const raw = (this.form.controls.number.value ?? '').toString().trim();
+    if (!raw) return;
+    this.verifyState.set('checking');
+    try {
+      const res = await this.invoiceSvc.checkNumberAvailable(raw);
+      this.verifyState.set(res.available ? 'available' : 'taken');
+    } catch (e: any) {
+      this.verifyState.set('idle');
+      this.error.set(e?.message ?? 'Verification failed.');
+    }
+  }
+
+  /** Disables the Save button while override is active but unverified. */
+  canSubmit(): boolean {
+    if (this.kindValue() !== 'sales' || !this.overriding()) return true;
+    return this.verifyState() === 'available';
   }
 
   get lineItems(): FormArray<FormGroup> {
@@ -364,9 +449,20 @@ export class InvoiceFormComponent {
         gstNumber: customer.gstNumber ?? null
       };
 
+      // Number passed to the service:
+      //  - purchase: always the user-supplied supplier number
+      //  - sales WITH override: the user-supplied override number (uniqueness re-checked server-side)
+      //  - sales WITHOUT override: undefined → service auto-numbers via the counter
+      let numberToSend: string | undefined;
+      if (v.kind === 'purchase') {
+        numberToSend = (v.number ?? '').trim();
+      } else if (this.overriding()) {
+        numberToSend = (v.number ?? '').trim();
+      }
+
       const res = await this.invoiceSvc.create({
         kind: v.kind as InvoiceKind,
-        number: v.kind === 'purchase' ? (v.number ?? '').trim() : undefined,
+        number: numberToSend,
         customer: customerSnapshot,
         lineItems,
         currency: v.currency,
