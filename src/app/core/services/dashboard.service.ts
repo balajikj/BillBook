@@ -29,7 +29,16 @@ export interface DashboardSummary {
   purchase: KindMetrics;
   gst: GstSummary;
   recent: Invoice[];
-  windowDays: number;
+  /** Inclusive lower bound of the window applied to per-kind + GST metrics. */
+  from: Date;
+  /** Exclusive upper bound. The reporting interval is `[from, toExclusive)`. */
+  toExclusive: Date;
+}
+
+/** Caller-supplied window. When omitted, the service defaults to the last 90 days. */
+export interface DateRange {
+  from: Date;
+  toExclusive: Date;
 }
 
 const EMPTY_KIND_METRICS = (): KindMetrics => ({
@@ -44,13 +53,12 @@ export class DashboardService {
   private readonly db = inject(Firestore);
   private readonly auth = inject(AuthService);
 
-  async load(): Promise<DashboardSummary> {
+  async load(range?: DateRange): Promise<DashboardSummary> {
     const cid = this.auth.companyId();
     if (!cid) throw new Error('No companyId on the current user');
-    const windowDays = 90;
-    const since = new Date();
-    since.setDate(since.getDate() - windowDays);
-    const sinceTs = Timestamp.fromDate(since);
+    const window = range ?? defaultLast90Days();
+    const fromTs = Timestamp.fromDate(window.from);
+    const toExclusiveTs = Timestamp.fromDate(window.toExclusive);
     const nowMillis = Date.now();
 
     const col = collection(this.db, `companies/${cid}/invoices`);
@@ -61,7 +69,12 @@ export class DashboardService {
 
     // ----- 1. Paid invoices (revenue / paid-out + paid counts) -----
     const paidSnap = await getDocs(
-      query(col, where('status', '==', 'paid'), where('createdAt', '>=', sinceTs))
+      query(
+        col,
+        where('status', '==', 'paid'),
+        where('createdAt', '>=', fromTs),
+        where('createdAt', '<', toExclusiveTs)
+      )
     );
     paidSnap.forEach((d) => {
       const inv = d.data() as Invoice;
@@ -73,7 +86,12 @@ export class DashboardService {
 
     // ----- 2. Pending invoices (overdue split) -----
     const pendingSnap = await getDocs(
-      query(col, where('status', '==', 'pending'), where('createdAt', '>=', sinceTs))
+      query(
+        col,
+        where('status', '==', 'pending'),
+        where('createdAt', '>=', fromTs),
+        where('createdAt', '<', toExclusiveTs)
+      )
     );
     pendingSnap.forEach((d) => {
       const inv = d.data() as Invoice;
@@ -86,7 +104,12 @@ export class DashboardService {
     // GST liability accrues at invoice-issue time regardless of payment, so we
     // include every invoice in the window with gstPercent > 0 and currency INR.
     const gstSnap = await getDocs(
-      query(col, where('gstPercent', '>', 0), where('createdAt', '>=', sinceTs))
+      query(
+        col,
+        where('createdAt', '>=', fromTs),
+        where('createdAt', '<', toExclusiveTs),
+        where('gstPercent', '>', 0)
+      )
     );
     gstSnap.forEach((d) => {
       const inv = d.data() as Invoice;
@@ -106,10 +129,63 @@ export class DashboardService {
     const recent: Invoice[] = [];
     recentSnap.forEach((d) => recent.push({ id: d.id, ...(d.data() as Omit<Invoice, 'id'>) }));
 
-    return { sales, purchase, gst, recent, windowDays };
+    return { sales, purchase, gst, recent, from: window.from, toExclusive: window.toExclusive };
   }
 }
 
 function roundMoney(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+function defaultLast90Days(): DateRange {
+  const toExclusive = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - 90);
+  return { from, toExclusive };
+}
+
+// ----- preset helpers used by the dashboard component -----
+
+export type RangePresetId = 'this-month' | 'last-month' | 'last-90-days' | 'custom';
+
+/** Resolve a preset (or a custom from/to pair) into a concrete DateRange. */
+export function rangeFromPreset(
+  preset: RangePresetId,
+  custom?: { from?: string; to?: string }
+): DateRange {
+  const now = new Date();
+  switch (preset) {
+    case 'this-month': {
+      const from = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+      // Exclusive upper bound: first day of NEXT month at 00:00 (so "today" is included).
+      const toExclusive = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+      return { from, toExclusive };
+    }
+    case 'last-month': {
+      const from = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+      const toExclusive = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+      return { from, toExclusive };
+    }
+    case 'custom': {
+      const from = parseLocalDate(custom?.from) ?? defaultLast90Days().from;
+      // "To" is inclusive in the date picker; convert to an exclusive upper bound
+      // by adding one day so the last day's invoices count.
+      const inclusiveTo = parseLocalDate(custom?.to) ?? new Date();
+      const toExclusive = new Date(inclusiveTo);
+      toExclusive.setDate(toExclusive.getDate() + 1);
+      toExclusive.setHours(0, 0, 0, 0);
+      return { from, toExclusive };
+    }
+    case 'last-90-days':
+    default:
+      return defaultLast90Days();
+  }
+}
+
+function parseLocalDate(s: string | undefined): Date | null {
+  if (!s) return null;
+  // `<input type="date">` value is `YYYY-MM-DD`. Construct a local-midnight Date.
+  const [y, m, d] = s.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d, 0, 0, 0, 0);
 }
