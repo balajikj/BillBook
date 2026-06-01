@@ -47,6 +47,15 @@ service cloud.firestore {
           && request.resource.data.defaultCurrency.size() == 3;
     }
 
+    // Helper: non-admin tenant members may update only the inventory-bearing
+    // fields of a product. Used by the invoice-create transaction to debit /
+    // credit stock without escalating non-admins to full product write.
+    function onlyTouchesInventoryFields() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['quantity', 'updatedAt'])
+          && request.resource.data.quantity is number;
+    }
+
     // Helper: a company-admin's self-service update to their own gate doc.
     // Tighter than `hasOnlyGateFields` — also pins `status` and enforces a
     // stricter format on the editable fields (length 1..120 for name; strict
@@ -102,9 +111,15 @@ service cloud.firestore {
       }
 
       // ---------- /companies/{cid}/products ----------
+      // Admins manage the full product catalogue. Non-admins (company-user)
+      // are additionally permitted to update ONLY the `quantity` and
+      // `updatedAt` fields, so that creating an invoice can transactionally
+      // adjust inventory.
       match /products/{productId} {
         allow read: if isTenantMember(cid);
-        allow create, update, delete: if isTenantAdmin(cid);
+        allow create, delete: if isTenantAdmin(cid);
+        allow update: if isTenantAdmin(cid)
+                      || (isTenantMember(cid) && onlyTouchesInventoryFields());
       }
 
       // ---------- /companies/{cid}/invoices ----------

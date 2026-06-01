@@ -18,6 +18,16 @@ export type DisplayInvoiceStatus = StoredInvoiceStatus | 'overdue';
  */
 export type InvoiceKind = 'sales' | 'purchase';
 
+/**
+ * Sub-category for purchase invoices. Meaningless for sales bills.
+ *   - `product`      — bought goods to resell. Adds to inventory at create time.
+ *   - `raw-material` — bought materials for production / internal use. Does
+ *                      NOT touch inventory.
+ * Legacy purchase invoices that don't carry this field read as `'product'`
+ * via `getPurchaseCategory(inv)`.
+ */
+export type PurchaseCategory = 'product' | 'raw-material';
+
 export interface InvoiceLineItem {
   productId: string | null;  // null if the line item was free-form
   description: string;
@@ -55,6 +65,10 @@ export interface Invoice {
   // Sales vs purchase bill direction (added by sales-purchase-bills).
   // Missing on legacy docs — read via `getInvoiceKind(inv)` which defaults to 'sales'.
   kind?: InvoiceKind;
+  // Purchase sub-category (added by product-inventory feature). Only meaningful
+  // when kind === 'purchase'. Read via `getPurchaseCategory(inv)` which defaults
+  // legacy purchase invoices to 'product'.
+  purchaseCategory?: PurchaseCategory;
 }
 
 // Counter document at /companies/{cid}/counters/invoice
@@ -92,4 +106,14 @@ export function hasIndiaTotals(invoice: Pick<Invoice, 'gstPercent' | 'otherCharg
  */
 export function getInvoiceKind(invoice: Pick<Invoice, 'kind'>): InvoiceKind {
   return invoice.kind ?? 'sales';
+}
+
+/**
+ * Central accessor for the purchase sub-category. Returns `'product'` for any
+ * invoice that doesn't store a `purchaseCategory` (legacy purchase invoices and
+ * all sales invoices). Callers that care about sales-vs-purchase MUST gate on
+ * `getInvoiceKind(inv) === 'purchase'` first.
+ */
+export function getPurchaseCategory(invoice: Pick<Invoice, 'purchaseCategory'>): PurchaseCategory {
+  return invoice.purchaseCategory ?? 'product';
 }

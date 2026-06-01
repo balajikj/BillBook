@@ -7,7 +7,7 @@ import { ProductService } from '../../core/services/product.service';
 import { InvoiceService } from '../../core/services/invoice.service';
 import { Customer } from '../../core/models/customer';
 import { Product } from '../../core/models/product';
-import { InvoiceKind, InvoiceLineItem } from '../../core/models/invoice';
+import { InvoiceKind, InvoiceLineItem, PurchaseCategory } from '../../core/models/invoice';
 import { gstPercentValidator, hsnValidator } from '../../core/validators/gst';
 import { computeCgstSgst, computeGrandTotal, roundMoney } from '../../core/utils/invoice-math';
 import { GST_SLABS } from '../../core/utils/gst-slabs';
@@ -30,6 +30,20 @@ import { numberToWords } from '../../core/utils/number-to-words';
           <input type="radio" formControlName="kind" value="purchase" /> Purchase <span class="muted small">(I received this bill from a supplier)</span>
         </label>
       </fieldset>
+
+      @if (kindValue() === 'purchase') {
+        <fieldset class="kind-toggle">
+          <legend>Purchase category</legend>
+          <label>
+            <input type="radio" formControlName="purchaseCategory" value="product" />
+            Product <span class="muted small">(adds to inventory)</span>
+          </label>
+          <label>
+            <input type="radio" formControlName="purchaseCategory" value="raw-material" />
+            Raw material <span class="muted small">(no inventory change)</span>
+          </label>
+        </fieldset>
+      }
 
       <div class="row">
         <label>{{ counterpartyLabel() }} *
@@ -57,7 +71,7 @@ import { numberToWords } from '../../core/utils/number-to-words';
               </small>
             } @else {
               <div class="override-row">
-                <input formControlName="number" maxlength="64" placeholder="e.g. INV-2026-0042" (input)="onNumberEdited()" />
+                <input formControlName="number" maxlength="64" placeholder="e.g. INV/2026/0042" (input)="onNumberEdited()" />
                 <button type="button" class="check-btn" (click)="verifyNumber()"
                         [disabled]="!form.controls.number.value || verifyState() === 'checking'">
                   {{ verifyState() === 'checking' ? 'Checking…' : 'Check availability' }}
@@ -249,6 +263,7 @@ export class InvoiceFormComponent {
 
   readonly form = this.fb.nonNullable.group({
     kind: ['sales' as InvoiceKind, [Validators.required]],
+    purchaseCategory: ['product' as PurchaseCategory], // meaningful only when kind === 'purchase'
     number: [''], // only used when kind === 'purchase'; validators applied dynamically
     customerId: ['', [Validators.required]],
     currency: ['INR', [Validators.required, Validators.pattern(/^[A-Z]{3}$/)]],
@@ -303,6 +318,10 @@ export class InvoiceFormComponent {
       this.verifyState.set('idle');
       if (k === 'purchase') {
         numberCtrl.setValidators([Validators.required, Validators.maxLength(64)]);
+        // Pre-populate with `VEN/<currentYear>/` so the user only types the
+        // trailing digits. Same convention as the sales-override prefix.
+        // Applies to both product and raw-material purchase categories.
+        numberCtrl.setValue(`VEN/${new Date().getFullYear()}/`, { emitEvent: false });
       } else {
         numberCtrl.setValidators([]);
         numberCtrl.setValue('', { emitEvent: false });
@@ -318,7 +337,10 @@ export class InvoiceFormComponent {
     this.verifyState.set('idle');
     const c = this.form.controls.number;
     c.setValidators([Validators.required, Validators.maxLength(64)]);
-    c.setValue('', { emitEvent: false });
+    // Pre-populate with `INV/<currentYear>/` so the user only types the trailing
+    // sequence — the typical re-use case is correcting a recently-issued bill,
+    // which carries the same prefix.
+    c.setValue(`INV/${new Date().getFullYear()}/`, { emitEvent: false });
     c.updateValueAndValidity({ emitEvent: false });
   }
 
@@ -467,6 +489,9 @@ export class InvoiceFormComponent {
 
       const res = await this.invoiceSvc.create({
         kind: v.kind as InvoiceKind,
+        purchaseCategory: v.kind === 'purchase'
+          ? ((v.purchaseCategory as PurchaseCategory) ?? 'product')
+          : undefined,
         number: numberToSend,
         customer: customerSnapshot,
         lineItems,

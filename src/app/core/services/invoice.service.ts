@@ -1,10 +1,10 @@
 import { Injectable, inject } from '@angular/core';
 import {
   Firestore, Timestamp, collection, collectionData, deleteDoc, doc, docData,
-  getDoc, getDocs, limit as fsLimit, orderBy, query, runTransaction, serverTimestamp, setDoc, updateDoc, where
+  getDoc, getDocs, limit as fsLimit, orderBy, query, runTransaction, serverTimestamp, updateDoc, where
 } from '@angular/fire/firestore';
 import { Observable } from 'rxjs';
-import { Invoice, InvoiceKind, InvoiceLineItem, StoredInvoiceStatus } from '../models/invoice';
+import { Invoice, InvoiceKind, InvoiceLineItem, PurchaseCategory, StoredInvoiceStatus } from '../models/invoice';
 import { CustomerSnapshot } from '../models/customer';
 import { AuthService } from './auth.service';
 import { computeCgstSgst, computeGrandTotal, roundMoney } from '../utils/invoice-math';
@@ -28,6 +28,12 @@ export interface CreateInvoiceArgs {
   kind: InvoiceKind;
   /** Required when `kind === 'purchase'`. Stored verbatim as the invoice's `number`. */
   number?: string;
+  /**
+   * Purchase sub-category. Required when `kind === 'purchase'`; ignored for sales.
+   *   - `product`      → adds line-item quantities to product stock at create time.
+   *   - `raw-material` → does NOT touch product stock.
+   */
+  purchaseCategory?: PurchaseCategory;
   customer: CustomerSnapshot;
   lineItems: InvoiceLineItem[];
   currency: string;
@@ -109,11 +115,25 @@ export class InvoiceService {
   }
 
   /**
-   * Create an invoice. The path branches on `args.kind`:
-   *   - `sales`   — transactionally allocates the next `INV-YYYY-NNNN` from the
-   *                 per-tenant counter and writes the invoice with that number.
-   *   - `purchase` — uses `args.number` (the supplier's printed bill number)
-   *                  verbatim and writes the invoice WITHOUT touching the counter.
+   * Create an invoice. A single Firestore transaction does all the work so
+   * the invoice write, the counter bump (sales auto-number only), and the
+   * product-inventory deltas all commit atomically:
+   *
+   *   - `sales`                    → decrement linked products' quantity
+   *   - `purchase` + `product`     → increment linked products' quantity
+   *   - `purchase` + `raw-material` → no inventory effect
+   *
+   * Numbering:
+   *   - `sales` without `args.number`        → next `INV-YYYY-NNNN` via counter.
+   *   - `sales` with `args.number`           → caller-supplied (override flow);
+   *                                            counter unchanged.
+   *   - `purchase`                           → `args.number` required (supplier's
+   *                                            printed number); counter unchanged.
+   *
+   * Free-form line items (`productId: null`) and zero-quantity lines have no
+   * inventory effect. Products that have been deleted between the form load
+   * and save are silently skipped (the invoice still commits with its
+   * snapshotted line items).
    */
   async create(args: CreateInvoiceArgs): Promise<{ id: string; number: string }> {
     const cid = this.cid();
@@ -124,12 +144,41 @@ export class InvoiceService {
     const roundOff = roundMoney(Number(args.roundOff ?? 0));
     const { cgst, sgst } = computeCgstSgst(subtotal, gstPercent);
     const grandTotal = computeGrandTotal(subtotal, cgst, sgst, otherCharges, roundOff);
-    // `total` stays for back-compat; it equals subtotal when there's no GST/charges (legacy behaviour),
-    // otherwise it mirrors grandTotal so anything that still reads `total` shows the final amount.
     const hasIndiaFields = gstPercent > 0 || otherCharges !== 0 || roundOff !== 0;
     const total = hasIndiaFields ? grandTotal : subtotal;
     const year = new Date().getFullYear();
     const kind: InvoiceKind = args.kind ?? 'sales';
+    const purchaseCategory: PurchaseCategory = args.purchaseCategory ?? 'product';
+
+    // ----- Number validation (pre-transaction) -----
+    const suppliedNumber = (args.number ?? '').toString().trim();
+    if (kind === 'purchase') {
+      if (!suppliedNumber) throw new Error('Purchase bill number is required.');
+      if (suppliedNumber.length > 64) throw new Error('Purchase bill number must be 64 characters or fewer.');
+    } else if (suppliedNumber) {
+      // Sales override path: caller wants to reuse a specific number.
+      if (suppliedNumber.length > 64) throw new Error('Bill number must be 64 characters or fewer.');
+      // Soft pre-check (the real check is inside the transaction; see TOCTOU note in checkNumberAvailable).
+      const recheck = await this.checkNumberAvailable(suppliedNumber);
+      if (!recheck.available) {
+        throw new Error(`Bill number "${suppliedNumber}" is already in use by another invoice.`);
+      }
+    }
+
+    // ----- Compute inventory deltas (sign by kind + category) -----
+    const inventorySign: 1 | -1 | 0 =
+      kind === 'sales' ? -1
+        : (kind === 'purchase' && purchaseCategory === 'product') ? +1
+        : 0;
+    const inventoryDeltas = new Map<string, number>();
+    if (inventorySign !== 0) {
+      for (const li of args.lineItems) {
+        const pid = li.productId;
+        const q = Number(li.quantity ?? 0);
+        if (!pid || q === 0) continue;
+        inventoryDeltas.set(pid, (inventoryDeltas.get(pid) ?? 0) + inventorySign * q);
+      }
+    }
 
     /** Build the fields common to both sales and purchase persistence. */
     const baseDoc = (number: string): Record<string, unknown> => {
@@ -150,6 +199,7 @@ export class InvoiceService {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       };
+      if (kind === 'purchase') out['purchaseCategory'] = purchaseCategory;
       if (hasIndiaFields) {
         out['gstPercent'] = gstPercent;
         out['cgstAmount'] = cgst;
@@ -161,53 +211,58 @@ export class InvoiceService {
       return out;
     };
 
-    // ----- Purchase: caller supplies the supplier's bill number; no counter -----
-    if (kind === 'purchase') {
-      const supplied = (args.number ?? '').toString().trim();
-      if (!supplied) throw new Error('Purchase bill number is required.');
-      if (supplied.length > 64) throw new Error('Purchase bill number must be 64 characters or fewer.');
-      const invoiceRef = doc(collection(this.db, this.invoicesPath()));
-      await setDoc(invoiceRef, baseDoc(supplied));
-      return { id: invoiceRef.id, number: supplied };
-    }
+    const needsCounter = kind === 'sales' && !suppliedNumber;
 
-    // ----- Sales OVERRIDE: caller supplied a number (e.g. reusing a number
-    // whose old bill was deleted/corrected). Skip the counter — overriding
-    // doesn't move the auto-number cursor. Re-check availability immediately
-    // before write to narrow the TOCTOU window. -----
-    if (kind === 'sales' && args.number !== undefined && args.number !== null && args.number !== '') {
-      const supplied = (args.number ?? '').toString().trim();
-      if (!supplied) throw new Error('Override bill number is required when override is active.');
-      if (supplied.length > 64) throw new Error('Bill number must be 64 characters or fewer.');
-      const recheck = await this.checkNumberAvailable(supplied);
-      if (!recheck.available) {
-        throw new Error(`Bill number "${supplied}" is already in use by another invoice.`);
-      }
-      const invoiceRef = doc(collection(this.db, this.invoicesPath()));
-      await setDoc(invoiceRef, baseDoc(supplied));
-      return { id: invoiceRef.id, number: supplied };
-    }
-
-    // ----- Sales (default): transactional counter increment + auto-number -----
     return await runTransaction(this.db, async (tx) => {
-      const counterRef = doc(this.db, `companies/${cid}/counters/invoice`);
-      const counterSnap = await tx.get(counterRef);
-      let next: number;
-      let yr: number;
-      if (!counterSnap.exists()) {
-        next = 1; yr = year;
-      } else {
-        const data = counterSnap.data() as { year: number; next: number };
-        if (data.year === year) {
-          next = data.next; yr = year;
-        } else {
-          next = 1; yr = year;
+      // ----- PHASE 1: all reads (Firestore tx rule: reads before writes) -----
+
+      const counterRef = needsCounter
+        ? doc(this.db, `companies/${cid}/counters/invoice`)
+        : null;
+      const counterSnap = counterRef ? await tx.get(counterRef) : null;
+
+      // Read each unique product whose inventory we need to adjust.
+      const productCurrents = new Map<string, { ref: ReturnType<typeof doc>; current: number }>();
+      for (const productId of inventoryDeltas.keys()) {
+        const ref = doc(this.db, `companies/${cid}/products/${productId}`);
+        const snap = await tx.get(ref);
+        if (snap.exists()) {
+          const data = snap.data() as { quantity?: number };
+          productCurrents.set(productId, { ref, current: Number(data.quantity ?? 0) });
         }
+        // Missing product → skip silently; the line-item snapshot is the source of truth on the invoice.
       }
-      const number = `INV-${yr}-${String(next).padStart(4, '0')}`;
-      tx.set(counterRef, { year: yr, next: next + 1 });
+
+      // ----- PHASE 2: determine the invoice number -----
+      let number: string;
+      if (kind === 'purchase' || suppliedNumber) {
+        number = suppliedNumber;
+      } else {
+        // Sales auto-number from the counter.
+        let next: number;
+        let yr: number;
+        if (!counterSnap || !counterSnap.exists()) {
+          next = 1; yr = year;
+        } else {
+          const data = counterSnap.data() as { year: number; next: number };
+          if (data.year === year) { next = data.next; yr = year; } else { next = 1; yr = year; }
+        }
+        number = `INV-${yr}-${String(next).padStart(4, '0')}`;
+        tx.set(counterRef!, { year: yr, next: next + 1 });
+      }
+
+      // ----- PHASE 3: apply inventory deltas -----
+      for (const [productId, delta] of inventoryDeltas) {
+        const data = productCurrents.get(productId);
+        if (!data) continue;
+        const newQty = roundMoney(data.current + delta);
+        tx.update(data.ref, { quantity: newQty, updatedAt: serverTimestamp() });
+      }
+
+      // ----- PHASE 4: write the invoice -----
       const invoiceRef = doc(collection(this.db, this.invoicesPath()));
       tx.set(invoiceRef, baseDoc(number));
+
       return { id: invoiceRef.id, number };
     });
   }

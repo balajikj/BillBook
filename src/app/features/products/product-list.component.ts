@@ -3,7 +3,7 @@ import { DecimalPipe } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ProductService } from '../../core/services/product.service';
-import { Product } from '../../core/models/product';
+import { Product, getProductQuantity } from '../../core/models/product';
 import { hsnValidator } from '../../core/validators/gst';
 
 @Component({
@@ -30,6 +30,11 @@ import { hsnValidator } from '../../core/validators/gst';
         }
         <label>Unit price * <input type="number" min="0" step="0.01" formControlName="unitPrice" /></label>
         <label>Currency * (ISO 4217) <input formControlName="currency" maxlength="3" /></label>
+        <label>
+          Stock quantity
+          <input type="number" step="0.01" formControlName="quantity" placeholder="0" />
+          <small class="muted small">Current on-hand stock. Purchases add to this; sales subtract.</small>
+        </label>
         @if (error(); as e) { <p class="error">{{ e }}</p> }
         <button type="submit" [disabled]="form.invalid || busy()">{{ busy() ? 'Saving…' : 'Save' }}</button>
         <button type="button" (click)="editing.set(null)">Cancel</button>
@@ -43,6 +48,7 @@ import { hsnValidator } from '../../core/validators/gst';
           @if (showHsn()) { <th>HSN/SAC</th> }
           <th>Unit price</th>
           <th>Currency</th>
+          <th>Stock</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -53,6 +59,10 @@ import { hsnValidator } from '../../core/validators/gst';
             @if (showHsn()) { <td>{{ p.hsnSac ?? '' }}</td> }
             <td>{{ p.unitPrice | number:'1.2-2' }}</td>
             <td>{{ p.currency }}</td>
+            <td>
+              <span [class.stock-neg]="qty(p) < 0">{{ qty(p) | number:'1.0-2' }}</span>
+              @if (qty(p) < 0) { <small class="warn">⚠ over-sold</small> }
+            </td>
             <td>
               <button type="button" (click)="startEdit(p)">Edit</button>
               <button type="button" (click)="confirmRemove(p)">Delete</button>
@@ -78,6 +88,8 @@ import { hsnValidator } from '../../core/validators/gst';
     .error { color: #c0392b; }
     .field-error { color: #c0392b; font-size: 12px; display: block; margin-top: 2px; }
     input.ng-invalid.ng-touched, textarea.ng-invalid.ng-touched { border-color: #c0392b; }
+    .stock-neg { color: #c0392b; font-weight: 600; }
+    .warn { color: #c0392b; margin-left: 4px; }
   `]
 })
 export class ProductListComponent {
@@ -90,15 +102,21 @@ export class ProductListComponent {
   readonly error = signal<string | null>(null);
 
   readonly showHsn = computed(() => this.products().some((p) => !!p.hsnSac));
-  readonly totalCols = computed(() => 4 + Number(this.showHsn()));
+  // Columns: Name, [HSN], Unit price, Currency, Stock, Actions = 5 + HSN
+  readonly totalCols = computed(() => 5 + Number(this.showHsn()));
 
   readonly form = this.fb.nonNullable.group({
     name: ['', [Validators.required]],
     description: [''],
     hsnSac: ['', [hsnValidator()]],
     unitPrice: [0, [Validators.required, Validators.min(0)]],
-    currency: ['INR', [Validators.required, Validators.pattern(/^[A-Za-z]{3}$/)]]
+    currency: ['INR', [Validators.required, Validators.pattern(/^[A-Za-z]{3}$/)]],
+    quantity: [0]
   });
+
+  qty(p: Product): number {
+    return getProductQuantity(p);
+  }
 
   showError(control: { invalid: boolean; touched: boolean; dirty: boolean }): boolean {
     return control.invalid && (control.touched || control.dirty);
@@ -107,7 +125,7 @@ export class ProductListComponent {
   startCreate(): void {
     this.editing.set({ id: null });
     this.error.set(null);
-    this.form.reset({ name: '', description: '', hsnSac: '', unitPrice: 0, currency: 'INR' });
+    this.form.reset({ name: '', description: '', hsnSac: '', unitPrice: 0, currency: 'INR', quantity: 0 });
   }
 
   startEdit(p: Product): void {
@@ -118,7 +136,8 @@ export class ProductListComponent {
       description: p.description ?? '',
       hsnSac: p.hsnSac ?? '',
       unitPrice: p.unitPrice,
-      currency: p.currency
+      currency: p.currency,
+      quantity: getProductQuantity(p)
     });
   }
 
@@ -131,7 +150,8 @@ export class ProductListComponent {
       const payload: Record<string, unknown> = {
         name: raw.name.trim(),
         unitPrice: Number(raw.unitPrice),
-        currency: raw.currency.toUpperCase()
+        currency: raw.currency.toUpperCase(),
+        quantity: Number(raw.quantity ?? 0)
       };
       if (raw.description.trim()) payload['description'] = raw.description.trim();
       if (raw.hsnSac.trim()) payload['hsnSac'] = raw.hsnSac.trim();

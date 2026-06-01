@@ -268,11 +268,48 @@ describe('products (per-tenant isolation)', () => {
     }));
   });
 
-  it('non-admin CANNOT write products', async () => {
+  it('non-admin CANNOT create or wholesale-replace a product', async () => {
     const db = userCtx(COMPANY_A).firestore();
     await assertFails(setDoc(doc(db, `companies/${COMPANY_A}/products/p1`), {
       name: 'P1', unitPrice: 10, currency: 'USD'
     }));
+  });
+
+  it('non-admin CAN update only the quantity field of an existing product (inventory diff)', async () => {
+    await env.withSecurityRulesDisabled(async (sctx) => {
+      await setDoc(doc(sctx.firestore(), `companies/${COMPANY_A}/products/p1`), {
+        name: 'P1', unitPrice: 10, currency: 'USD', quantity: 5
+      });
+    });
+    const db = userCtx(COMPANY_A).firestore();
+    await assertSucceeds(updateDoc(doc(db, `companies/${COMPANY_A}/products/p1`), {
+      quantity: 4
+    }));
+  });
+
+  it('non-admin CANNOT update price or name via the inventory path', async () => {
+    await env.withSecurityRulesDisabled(async (sctx) => {
+      await setDoc(doc(sctx.firestore(), `companies/${COMPANY_A}/products/p1`), {
+        name: 'P1', unitPrice: 10, currency: 'USD', quantity: 5
+      });
+    });
+    const db = userCtx(COMPANY_A).firestore();
+    await assertFails(updateDoc(doc(db, `companies/${COMPANY_A}/products/p1`), {
+      name: 'Hijacked', quantity: 4
+    }));
+    await assertFails(updateDoc(doc(db, `companies/${COMPANY_A}/products/p1`), {
+      unitPrice: 99999
+    }));
+  });
+
+  it('non-admin CANNOT delete a product', async () => {
+    await env.withSecurityRulesDisabled(async (sctx) => {
+      await setDoc(doc(sctx.firestore(), `companies/${COMPANY_A}/products/p1`), {
+        name: 'P1', unitPrice: 10, currency: 'USD'
+      });
+    });
+    const db = userCtx(COMPANY_A).firestore();
+    await assertFails(deleteDoc(doc(db, `companies/${COMPANY_A}/products/p1`)));
   });
 });
 
