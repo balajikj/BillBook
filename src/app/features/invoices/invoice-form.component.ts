@@ -118,6 +118,7 @@ import { numberToWords } from '../../core/utils/number-to-words';
       }
 
       <h3>Line items</h3>
+      <div class="table-scroll">
       <table class="grid" formArrayName="lineItems">
         <thead><tr><th>Product</th><th>Description</th><th>HSN/SAC</th><th>Qty</th><th>Unit price</th><th>Line total</th><th></th></tr></thead>
         <tbody>
@@ -141,6 +142,7 @@ import { numberToWords } from '../../core/utils/number-to-words';
           }
         </tbody>
       </table>
+      </div>
       <p><button type="button" (click)="addLine()">+ Add line</button></p>
 
       <p><label>Notes <textarea formControlName="notes" rows="2"></textarea></label></p>
@@ -209,8 +211,12 @@ import { numberToWords } from '../../core/utils/number-to-words';
     .override-row input { flex: 1; min-width: 180px; }
     .ok { color: #1e6f1e; }
     .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
-    .row label { display: flex; flex-direction: column; font-size: 13px; gap: 4px; }
-    .row input, .row select { padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
+    .row label { display: flex; flex-direction: column; font-size: 13px; gap: 4px; flex: 1 1 200px; min-width: 0; }
+    .row input, .row select { padding: 6px; border: 1px solid #ccc; border-radius: 4px; min-width: 0; }
+    @media (max-width: 759px) {
+      .row label { flex-basis: 100%; }
+      .row input, .row select { width: 100%; }
+    }
     .grid { width: 100%; border-collapse: collapse; margin: 8px 0; background: white; }
     .grid th, .grid td { border-bottom: 1px solid #eee; padding: 6px; vertical-align: middle; }
     .grid th { background: #f5f5f5; font-size: 12px; text-align: left; }
@@ -235,7 +241,8 @@ import { numberToWords } from '../../core/utils/number-to-words';
     .totals-block .kv { display: flex; flex-direction: column; gap: 4px; font-size: 13px; padding-bottom: 4px; }
     .totals-block .kv .k { color: #666; }
     .totals-block .kv .v { font-weight: 600; }
-    .grand-total-block { margin: 12px 0; border: 1px solid #b8d4ff; background: #f0f6ff; padding: 12px 16px; border-radius: 6px; max-width: 480px; }
+    .grand-total-block { margin: 12px 0; border: 1px solid #b8d4ff; background: #f0f6ff; padding: 12px 16px; border-radius: 6px; max-width: 480px; margin-left: auto; }
+    @media (max-width: 759px) { .grand-total-block { max-width: 100%; margin-left: 0; } }
     .grand-total-block .row-line { display: flex; justify-content: space-between; margin: 2px 0; }
     .grand-total-block .grand-row { display: flex; justify-content: space-between; font-weight: 700; font-size: 18px; border-top: 1px solid #b8d4ff; padding-top: 6px; margin-top: 6px; }
     .grand-total-block .words { margin-top: 8px; font-style: italic; color: #333; }

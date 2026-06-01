@@ -40,6 +40,7 @@ type KindFilter = '' | InvoiceKind;
       <label>To <input type="date" formControlName="toDate" /></label>
     </form>
 
+    <div class="table-scroll">
     <table class="grid">
       <thead><tr><th>Number</th><th>Kind</th><th>Customer / Vendor</th><th>Total</th><th>Status</th><th>Issued</th><th>Due</th></tr></thead>
       <tbody>
@@ -58,6 +59,7 @@ type KindFilter = '' | InvoiceKind;
         }
       </tbody>
     </table>
+    </div>
     <p class="muted small">Showing up to 25 invoices.</p>
   `,
   styles: [`

@@ -112,6 +112,7 @@ interface CurrencyEntry { currency: string; amount: number; }
 
       <!-- ---------- Recent invoices ---------- -->
       <h2>Recent invoices <span class="muted small">(newest 10, all dates)</span></h2>
+      <div class="table-scroll">
       <table class="grid">
         <thead><tr><th>Number</th><th>Kind</th><th>Customer / Vendor</th><th>Total</th><th>Status</th><th>Issued</th></tr></thead>
         <tbody>
@@ -129,6 +130,7 @@ interface CurrencyEntry { currency: string; amount: number; }
           }
         </tbody>
       </table>
+      </div>
     }
   `,
   styles: [`
@@ -137,10 +139,22 @@ interface CurrencyEntry { currency: string; amount: number; }
     .range-picker { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin: 8px 0 16px; padding: 10px 12px; background: #fafafa; border: 1px solid #ddd; border-radius: 6px; }
     .range-picker label { display: flex; flex-direction: column; font-size: 12px; color: #555; gap: 4px; }
     .range-picker select, .range-picker input { padding: 6px; border: 1px solid #ccc; border-radius: 4px; font: inherit; }
-    .range-picker button { background: #1e6fff; color: white; border: 0; padding: 8px 14px; border-radius: 4px; cursor: pointer; }
+    .range-picker button { background: #1e6fff; color: white; border: 0; padding: 8px 14px; border-radius: 4px; cursor: pointer; min-height: var(--tap-min); }
     .range-summary { margin-left: auto; align-self: center; font-style: italic; }
-    .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 8px; }
-    .cards-3 { grid-template-columns: repeat(3, 1fr); }
+    @media (max-width: 759px) {
+      .range-picker { padding: 10px; gap: 8px; }
+      .range-picker label { flex: 1 1 calc(50% - 8px); min-width: 0; }
+      .range-picker select, .range-picker input { width: 100%; }
+      .range-picker button { flex: 1 1 100%; }
+      .range-summary { margin-left: 0; flex-basis: 100%; }
+    }
+    /* Card grid auto-fits — 4 columns wide, collapses to 2 then 1 as space shrinks. */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px; margin-top: 8px;
+    }
+    .cards-3 { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
     .card { border: 1px solid #ddd; border-radius: 6px; padding: 12px; background: white; }
     .card h3 { font-size: 13px; margin: 0 0 6px 0; color: #555; font-weight: 500; }
     .card .big { font-size: 28px; font-weight: 600; }

@@ -203,7 +203,7 @@ function optionalEmail(c: AbstractControl): ValidationErrors | null {
     h3 { font-size: 13px; margin: 12px 0 6px 0; font-weight: 600; }
     .row { display: flex; align-items: center; gap: 8px; }
     .card { border: 1px solid #ddd; border-radius: 6px; padding: 16px; margin: 12px 0; background: #fafafa; }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 16px; }
     .grid label, label.block { display: flex; flex-direction: column; font-size: 13px; gap: 4px; }
     input, textarea {
       padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px;

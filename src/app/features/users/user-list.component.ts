@@ -35,6 +35,7 @@ import { CompanyUser } from '../../core/models/user';
       </form>
     </details>
 
+    <div class="table-scroll">
     <table class="grid">
       <thead><tr><th>Email</th><th>Display name</th><th>Role</th><th>Created</th><th>Actions</th></tr></thead>
       <tbody>
@@ -57,6 +58,7 @@ import { CompanyUser } from '../../core/models/user';
         }
       </tbody>
     </table>
+    </div>
 
     @if (removeCommand(); as rc) {
       <div class="card command-block">

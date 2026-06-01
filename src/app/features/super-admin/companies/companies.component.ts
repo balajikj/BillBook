@@ -77,6 +77,7 @@ import { COMPANY_CODE_PATTERN } from '../../../core/models/role';
       </form>
     </details>
 
+    <div class="table-scroll">
     <table class="grid">
       <thead><tr><th>Code</th><th>Name</th><th>Default ccy</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
       <tbody>
@@ -101,6 +102,7 @@ import { COMPANY_CODE_PATTERN } from '../../../core/models/role';
         }
       </tbody>
     </table>
+    </div>
 
     @if (statusCommand(); as sc) {
       <div class="card command-block">

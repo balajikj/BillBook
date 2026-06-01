@@ -41,6 +41,7 @@ import { hsnValidator } from '../../core/validators/gst';
       </form>
     }
 
+    <div class="table-scroll">
     <table class="grid">
       <thead>
         <tr>
@@ -73,6 +74,7 @@ import { hsnValidator } from '../../core/validators/gst';
         }
       </tbody>
     </table>
+    </div>
   `,
   styles: [`
     h1 { margin: 0 0 12px 0; }
