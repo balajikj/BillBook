@@ -28,6 +28,15 @@ export type InvoiceKind = 'sales' | 'purchase';
  */
 export type PurchaseCategory = 'product' | 'raw-material';
 
+/**
+ * How GST is applied on the bill:
+ *   - `bill`: one slab for the whole bill (`gstPercent`). The original behaviour.
+ *   - `item`: each line carries its own slab (`lineItems[].gstPercent`). Bill-level
+ *     `cgstAmount` / `sgstAmount` are the sums of the line amounts.
+ * Missing on legacy docs — read via `getTaxMode(inv)` which defaults to `'bill'`.
+ */
+export type TaxMode = 'bill' | 'item';
+
 export interface InvoiceLineItem {
   productId: string | null;  // null if the line item was free-form
   description: string;
@@ -36,6 +45,10 @@ export interface InvoiceLineItem {
   lineTotal: number;         // quantity * unitPrice
   // India-specific (optional; added by india-gst-invoicing).
   hsnSac?: string | null;
+  // Item-wise tax (only when the invoice's taxMode === 'item').
+  gstPercent?: number | null;   // full slab, e.g. 18
+  cgstAmount?: number | null;
+  sgstAmount?: number | null;
 }
 
 export interface Invoice {
@@ -65,6 +78,11 @@ export interface Invoice {
   // Sales vs purchase bill direction (added by sales-purchase-bills).
   // Missing on legacy docs — read via `getInvoiceKind(inv)` which defaults to 'sales'.
   kind?: InvoiceKind;
+  // Tax application mode (added by item-wise-tax). Read via `getTaxMode(inv)`.
+  // In `item` mode `gstPercent` holds the HIGHEST line slab (so the dashboard's
+  // `gstPercent > 0` query still matches); display code must not present it as
+  // a single bill rate — use the per-line slabs instead.
+  taxMode?: TaxMode;
   // Purchase sub-category (added by product-inventory feature). Only meaningful
   // when kind === 'purchase'. Read via `getPurchaseCategory(inv)` which defaults
   // legacy purchase invoices to 'product'.
@@ -116,4 +134,31 @@ export function getInvoiceKind(invoice: Pick<Invoice, 'kind'>): InvoiceKind {
  */
 export function getPurchaseCategory(invoice: Pick<Invoice, 'purchaseCategory'>): PurchaseCategory {
   return invoice.purchaseCategory ?? 'product';
+}
+
+/** Central accessor for the tax mode; legacy invoices read as `'bill'`. */
+export function getTaxMode(invoice: Pick<Invoice, 'taxMode'>): TaxMode {
+  return invoice.taxMode ?? 'bill';
+}
+
+export interface TaxSlabSummary {
+  gstPercent: number;
+  taxable: number;
+  cgst: number;
+  sgst: number;
+}
+
+/** Groups an item-wise invoice's lines by slab (ascending) for the totals breakdown. */
+export function summarizeTaxBySlab(lineItems: InvoiceLineItem[]): TaxSlabSummary[] {
+  const bySlab = new Map<number, TaxSlabSummary>();
+  for (const li of lineItems) {
+    const pct = Number(li.gstPercent ?? 0);
+    if (pct <= 0) continue;
+    const row = bySlab.get(pct) ?? { gstPercent: pct, taxable: 0, cgst: 0, sgst: 0 };
+    row.taxable = Math.round((row.taxable + li.lineTotal) * 100) / 100;
+    row.cgst = Math.round((row.cgst + Number(li.cgstAmount ?? 0)) * 100) / 100;
+    row.sgst = Math.round((row.sgst + Number(li.sgstAmount ?? 0)) * 100) / 100;
+    bySlab.set(pct, row);
+  }
+  return [...bySlab.values()].sort((a, b) => a.gstPercent - b.gstPercent);
 }

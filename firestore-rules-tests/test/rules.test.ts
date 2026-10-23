@@ -172,6 +172,46 @@ describe('companies (gate document)', () => {
     }));
   });
 
+  // ----- feature flags (item-wise tax) — super-admin only -----
+
+  it('super-admin CAN set `features.itemWiseTax` on a gate doc', async () => {
+    await seedCompany(COMPANY_A);
+    const db = superCtx().firestore();
+    await assertSucceeds(updateDoc(doc(db, 'companies', COMPANY_A), {
+      features: { itemWiseTax: true }
+    }));
+  });
+
+  it('company-admin CANNOT enable `features` on their own gate doc', async () => {
+    await seedCompany(COMPANY_A);
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(updateDoc(doc(db, 'companies', COMPANY_A), {
+      features: { itemWiseTax: true }
+    }));
+  });
+
+  it('company-admin CANNOT turn off or change an existing `features` map', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'companies', COMPANY_A), {
+        name: 'A', status: 'active', defaultCurrency: 'USD', features: { itemWiseTax: true }
+      });
+    });
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertFails(updateDoc(doc(db, 'companies', COMPANY_A), {
+      features: { itemWiseTax: false }
+    }));
+  });
+
+  it('company-admin CAN still edit `name` when `features` is already set', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'companies', COMPANY_A), {
+        name: 'A', status: 'active', defaultCurrency: 'USD', features: { itemWiseTax: true }
+      });
+    });
+    const db = adminCtx(COMPANY_A).firestore();
+    await assertSucceeds(updateDoc(doc(db, 'companies', COMPANY_A), { name: 'Renamed' }));
+  });
+
   it('non-admin (company-user) CANNOT update gate doc', async () => {
     await seedCompany(COMPANY_A);
     const db = userCtx(COMPANY_A).firestore();

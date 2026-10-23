@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
-import { Invoice, computeDisplayStatus, getDisplayTotal, hasIndiaTotals } from '../models/invoice';
+import { Invoice, computeDisplayStatus, getDisplayTotal, getTaxMode, hasIndiaTotals, summarizeTaxBySlab } from '../models/invoice';
 import { Company } from '../models/company';
 import { InvoiceTemplate } from '../models/invoice-template';
 import { numberToWords } from '../utils/number-to-words';
@@ -110,19 +110,26 @@ function buildInvoiceCopy(
   const hasHsnColumn = invoice.lineItems.some((li) => !!li.hsnSac);
 
   // ----- Line items table widths (tuned for a ~268pt-wide copy column) -----
+  const itemWise = getTaxMode(invoice) === 'item';
   const tableWidths: any[] = hasHsnColumn ? ['*', 40, 22, 50, 60] : ['*', 22, 50, 60];
+  if (itemWise) tableWidths.splice(tableWidths.length - 1, 0, 28); // GST % column before Line total
 
   // ----- Line items table header + body -----
   const headerRow: any[] = [{ text: 'Description', bold: true }];
   if (hasHsnColumn) headerRow.push({ text: 'HSN/SAC', bold: true });
-  headerRow.push({ text: 'Qty', bold: true }, { text: 'Unit', bold: true }, { text: 'Line total', bold: true });
+  headerRow.push({ text: 'Qty', bold: true }, { text: 'Unit', bold: true });
+  if (itemWise) headerRow.push({ text: 'GST', bold: true });
+  headerRow.push({ text: 'Line total', bold: true });
 
   const rows: any[][] = invoice.lineItems.map((li) => {
     const row: any[] = [li.description ?? ''];
     if (hasHsnColumn) row.push(li.hsnSac ?? '');
     row.push(
       { text: String(li.quantity), alignment: 'right' },
-      { text: fmtCurrency(li.unitPrice, invoice.currency), alignment: 'right' },
+      { text: fmtCurrency(li.unitPrice, invoice.currency), alignment: 'right' }
+    );
+    if (itemWise) row.push({ text: `${li.gstPercent ?? 0}%`, alignment: 'right' });
+    row.push(
       { text: fmtCurrency(li.lineTotal, invoice.currency), alignment: 'right' }
     );
     return row;
@@ -134,7 +141,19 @@ function buildInvoiceCopy(
 
   if (india) {
     const half = (invoice.gstPercent ?? 0) / 2;
-    if ((invoice.gstPercent ?? 0) > 0) {
+    if (itemWise) {
+      // One CGST + SGST pair per slab actually used on the bill.
+      for (const row of summarizeTaxBySlab(invoice.lineItems)) {
+        totalsBody.push([
+          `CGST ${row.gstPercent / 2}% on ${fmtCurrency(row.taxable, invoice.currency)}`,
+          { text: fmtCurrency(row.cgst, invoice.currency), alignment: 'right' }
+        ]);
+        totalsBody.push([
+          `SGST ${row.gstPercent / 2}% on ${fmtCurrency(row.taxable, invoice.currency)}`,
+          { text: fmtCurrency(row.sgst, invoice.currency), alignment: 'right' }
+        ]);
+      }
+    } else if ((invoice.gstPercent ?? 0) > 0) {
       totalsBody.push([
         `CGST (${half}%)`,
         { text: fmtCurrency(invoice.cgstAmount ?? 0, invoice.currency), alignment: 'right' }

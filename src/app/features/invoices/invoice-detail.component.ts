@@ -8,7 +8,7 @@ import { CompanyService } from '../../core/services/company.service';
 import { CompanyProfileService } from '../../core/services/company-profile.service';
 import { AuthService } from '../../core/services/auth.service';
 import { PdfService } from '../../core/services/pdf.service';
-import { Invoice, InvoiceKind, computeDisplayStatus, getDisplayTotal, getInvoiceKind, hasIndiaTotals } from '../../core/models/invoice';
+import { Invoice, InvoiceKind, TaxSlabSummary, computeDisplayStatus, getDisplayTotal, getInvoiceKind, getTaxMode, hasIndiaTotals, summarizeTaxBySlab } from '../../core/models/invoice';
 import { numberToWords } from '../../core/utils/number-to-words';
 
 @Component({
@@ -51,6 +51,7 @@ import { numberToWords } from '../../core/utils/number-to-words';
             @if (hasHsnColumn(inv)) { <th>HSN/SAC</th> }
             <th>Qty</th>
             <th>Unit price</th>
+            @if (isItemWise(inv)) { <th>GST</th> }
             <th>Line total</th>
           </tr>
         </thead>
@@ -61,6 +62,9 @@ import { numberToWords } from '../../core/utils/number-to-words';
               @if (hasHsnColumn(inv)) { <td>{{ li.hsnSac ?? '' }}</td> }
               <td>{{ li.quantity }}</td>
               <td>{{ li.unitPrice | number:'1.2-2' }} {{ inv.currency }}</td>
+              @if (isItemWise(inv)) {
+                <td>{{ li.gstPercent ?? 0 }}% <span class="muted">({{ (li.cgstAmount ?? 0) + (li.sgstAmount ?? 0) | number:'1.2-2' }})</span></td>
+              }
               <td>{{ li.lineTotal | number:'1.2-2' }} {{ inv.currency }}</td>
             </tr>
           }
@@ -70,7 +74,12 @@ import { numberToWords } from '../../core/utils/number-to-words';
       @if (hasIndia(inv)) {
         <div class="totals-card">
           <p class="row-line"><span>Subtotal</span><span>{{ inv.subtotal | number:'1.2-2' }} {{ inv.currency }}</span></p>
-          @if ((inv.gstPercent ?? 0) > 0) {
+          @if (isItemWise(inv)) {
+            @for (row of slabs(inv); track row.gstPercent) {
+              <p class="row-line"><span>CGST {{ row.gstPercent / 2 | number:'1.0-2' }}% on {{ row.taxable | number:'1.2-2' }}</span><span>{{ row.cgst | number:'1.2-2' }} {{ inv.currency }}</span></p>
+              <p class="row-line"><span>SGST {{ row.gstPercent / 2 | number:'1.0-2' }}% on {{ row.taxable | number:'1.2-2' }}</span><span>{{ row.sgst | number:'1.2-2' }} {{ inv.currency }}</span></p>
+            }
+          } @else if ((inv.gstPercent ?? 0) > 0) {
             <p class="row-line"><span>CGST ({{ halfGst(inv) | number:'1.0-2' }}%)</span><span>{{ inv.cgstAmount | number:'1.2-2' }} {{ inv.currency }}</span></p>
             <p class="row-line"><span>SGST ({{ halfGst(inv) | number:'1.0-2' }}%)</span><span>{{ inv.sgstAmount | number:'1.2-2' }} {{ inv.currency }}</span></p>
           }
@@ -125,6 +134,7 @@ import { numberToWords } from '../../core/utils/number-to-words';
     .kind-badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; text-transform: uppercase; }
     .kind-badge.sales { background: #e3f0ff; color: #1e3a8a; }
     .kind-badge.purchase { background: #f3e8ff; color: #5b21b6; }
+    .muted { color: #888; font-size: 12px; }
     .right { text-align: right; margin: 4px 0; }
     .totals-card { margin: 12px 0 16px auto; max-width: 480px; padding: 12px 16px; border: 1px solid #b8d4ff; background: #f0f6ff; border-radius: 6px; }
     .totals-card .row-line { display: flex; justify-content: space-between; margin: 2px 0; }
@@ -169,6 +179,14 @@ export class InvoiceDetailComponent {
 
   hasIndia(inv: Invoice): boolean {
     return hasIndiaTotals(inv);
+  }
+
+  isItemWise(inv: Invoice): boolean {
+    return getTaxMode(inv) === 'item';
+  }
+
+  slabs(inv: Invoice): TaxSlabSummary[] {
+    return summarizeTaxBySlab(inv.lineItems);
   }
 
   hasHsnColumn(inv: Invoice): boolean {

@@ -7,9 +7,10 @@ import { ProductService } from '../../core/services/product.service';
 import { InvoiceService } from '../../core/services/invoice.service';
 import { Customer } from '../../core/models/customer';
 import { Product } from '../../core/models/product';
-import { InvoiceKind, InvoiceLineItem, PurchaseCategory } from '../../core/models/invoice';
+import { InvoiceKind, InvoiceLineItem, PurchaseCategory, TaxMode } from '../../core/models/invoice';
+import { FeatureService } from '../../core/services/feature.service';
 import { gstPercentValidator, hsnValidator } from '../../core/validators/gst';
-import { computeCgstSgst, computeGrandTotal, roundMoney } from '../../core/utils/invoice-math';
+import { computeCgstSgst, computeGrandTotal, computeItemWiseTax, roundMoney } from '../../core/utils/invoice-math';
 import { GST_SLABS } from '../../core/utils/gst-slabs';
 import { numberToWords } from '../../core/utils/number-to-words';
 
@@ -30,6 +31,20 @@ import { numberToWords } from '../../core/utils/number-to-words';
           <input type="radio" formControlName="kind" value="purchase" /> Purchase <span class="muted small">(I received this bill from a supplier)</span>
         </label>
       </fieldset>
+
+      @if (itemWiseEnabled()) {
+        <fieldset class="kind-toggle">
+          <legend>Tax applied</legend>
+          <label>
+            <input type="radio" formControlName="taxMode" value="bill" />
+            On whole bill <span class="muted small">(one GST slab)</span>
+          </label>
+          <label>
+            <input type="radio" formControlName="taxMode" value="item" />
+            Per item <span class="muted small">(GST slab on each line)</span>
+          </label>
+        </fieldset>
+      }
 
       @if (kindValue() === 'purchase') {
         <fieldset class="kind-toggle">
@@ -120,7 +135,7 @@ import { numberToWords } from '../../core/utils/number-to-words';
       <h3>Line items</h3>
       <div class="table-scroll">
       <table class="grid" formArrayName="lineItems">
-        <thead><tr><th>Product</th><th>Description</th><th>HSN/SAC</th><th>Qty</th><th>Unit price</th><th>Line total</th><th></th></tr></thead>
+        <thead><tr><th>Product</th><th>Description</th><th>HSN/SAC</th><th>Qty</th><th>Unit price</th>@if (taxModeValue() === 'item') { <th>GST slab</th> }<th>Line total</th>@if (taxModeValue() === 'item') { <th>Line tax</th> }<th></th></tr></thead>
         <tbody>
           @for (li of lineItems.controls; track $index; let i = $index) {
             <tr [formGroupName]="i">
@@ -136,7 +151,19 @@ import { numberToWords } from '../../core/utils/number-to-words';
               <td><input formControlName="hsnSac" maxlength="8" placeholder="6109" /></td>
               <td><input type="number" min="1" step="1" formControlName="quantity" (input)="recompute(i)" /></td>
               <td><input type="number" min="0" step="0.01" formControlName="unitPrice" (input)="recompute(i)" /></td>
+              @if (taxModeValue() === 'item') {
+                <td>
+                  <select formControlName="gstPercent" (change)="recomputeAll()">
+                    @for (slab of gstSlabs; track slab.value) {
+                      <option [ngValue]="slab.value">{{ slab.value }}%</option>
+                    }
+                  </select>
+                </td>
+              }
               <td class="right">{{ li.get('lineTotal')?.value | number:'1.2-2' }}</td>
+              @if (taxModeValue() === 'item') {
+                <td class="right">{{ lineTax(i) | number:'1.2-2' }}</td>
+              }
               <td><button type="button" (click)="removeLine(i)" [disabled]="lineItems.length === 1">×</button></td>
             </tr>
           }
@@ -149,6 +176,13 @@ import { numberToWords } from '../../core/utils/number-to-words';
 
       <section class="totals-block">
         <h3>Tax &amp; Charges</h3>
+        @if (taxModeValue() === 'item') {
+          <p class="muted small">GST is calculated per line from the slab chosen on each item.</p>
+          <div class="row">
+            <span class="kv"><span class="k">Total CGST:</span> <span class="v">{{ cgst() | number:'1.2-2' }}</span></span>
+            <span class="kv"><span class="k">Total SGST:</span> <span class="v">{{ sgst() | number:'1.2-2' }}</span></span>
+          </div>
+        } @else {
         <div class="row">
           <label>GST slab
             <select formControlName="gstPercent" (change)="recomputeAll()">
@@ -161,6 +195,7 @@ import { numberToWords } from '../../core/utils/number-to-words';
           <span class="kv"><span class="k">CGST ({{ halfGst() | number:'1.0-2' }}%):</span> <span class="v">{{ cgst() | number:'1.2-2' }}</span></span>
           <span class="kv"><span class="k">SGST ({{ halfGst() | number:'1.0-2' }}%):</span> <span class="v">{{ sgst() | number:'1.2-2' }}</span></span>
         </div>
+        }
         <div class="row">
           <label>Other Charges
             <input type="number" min="0" step="0.01" formControlName="otherCharges" (input)="recomputeAll()" />
@@ -177,7 +212,12 @@ import { numberToWords } from '../../core/utils/number-to-words';
 
       <section class="grand-total-block">
         <p class="row-line"><span>Subtotal</span><span>{{ subtotal() | number:'1.2-2' }} {{ form.value.currency }}</span></p>
-        @if (gstPercentValue() > 0) {
+        @if (taxModeValue() === 'item') {
+          @if (cgst() + sgst() > 0) {
+            <p class="row-line"><span>CGST (item-wise)</span><span>{{ cgst() | number:'1.2-2' }} {{ form.value.currency }}</span></p>
+            <p class="row-line"><span>SGST (item-wise)</span><span>{{ sgst() | number:'1.2-2' }} {{ form.value.currency }}</span></p>
+          }
+        } @else if (gstPercentValue() > 0) {
           <p class="row-line"><span>CGST ({{ halfGst() | number:'1.0-2' }}%)</span><span>{{ cgst() | number:'1.2-2' }} {{ form.value.currency }}</span></p>
           <p class="row-line"><span>SGST ({{ halfGst() | number:'1.0-2' }}%)</span><span>{{ sgst() | number:'1.2-2' }} {{ form.value.currency }}</span></p>
         }
@@ -254,6 +294,7 @@ export class InvoiceFormComponent {
   private readonly productSvc = inject(ProductService);
   private readonly invoiceSvc = inject(InvoiceService);
   private readonly router = inject(Router);
+  private readonly features = inject(FeatureService);
 
   readonly busy = signal(false);
   readonly error = signal<string | null>(null);
@@ -271,6 +312,7 @@ export class InvoiceFormComponent {
   readonly form = this.fb.nonNullable.group({
     kind: ['sales' as InvoiceKind, [Validators.required]],
     purchaseCategory: ['product' as PurchaseCategory], // meaningful only when kind === 'purchase'
+    taxMode: ['bill' as TaxMode], // 'item' only selectable when the tenant has itemWiseTax enabled
     number: [''], // only used when kind === 'purchase'; validators applied dynamically
     customerId: ['', [Validators.required]],
     currency: ['INR', [Validators.required, Validators.pattern(/^[A-Z]{3}$/)]],
@@ -300,12 +342,20 @@ export class InvoiceFormComponent {
   // Live signals driven by the form. Updated explicitly via recompute() / recomputeAll().
   readonly subtotal = signal(0);
   readonly gstPercentValue = signal(0);
+  /** Tenant entitlement (super-admin flag). When off, the form behaves exactly as before. */
+  readonly itemWiseEnabled = computed(() => !!this.features.features().itemWiseTax);
+  readonly taxModeValue = signal<TaxMode>('bill');
+  /** Per-line CGST+SGST for the live table; recalculated on every recomputeAll(). */
+  private readonly lineTaxes = signal<number[]>([]);
+  private readonly itemTax = signal({ cgst: 0, sgst: 0 });
   readonly otherChargesValue = signal(0);
   readonly roundOffValue = signal(0);
 
   readonly halfGst = computed(() => roundMoney(this.gstPercentValue() / 2));
-  readonly cgst = computed(() => computeCgstSgst(this.subtotal(), this.gstPercentValue()).cgst);
-  readonly sgst = computed(() => computeCgstSgst(this.subtotal(), this.gstPercentValue()).sgst);
+  readonly cgst = computed(() =>
+    this.taxModeValue() === 'item' ? this.itemTax().cgst : computeCgstSgst(this.subtotal(), this.gstPercentValue()).cgst);
+  readonly sgst = computed(() =>
+    this.taxModeValue() === 'item' ? this.itemTax().sgst : computeCgstSgst(this.subtotal(), this.gstPercentValue()).sgst);
   readonly grandTotal = computed(() =>
     computeGrandTotal(this.subtotal(), this.cgst(), this.sgst(), this.otherChargesValue(), this.roundOffValue())
   );
@@ -313,6 +363,14 @@ export class InvoiceFormComponent {
 
   constructor() {
     this.addLine();
+    // Load the tenant's flags; if item-wise tax is off, force bill mode.
+    this.features.load().then((f) => {
+      if (!f.itemWiseTax && this.form.controls.taxMode.value !== 'bill') {
+        this.form.controls.taxMode.setValue('bill');
+      }
+      this.recomputeAll();
+    });
+    this.form.controls.taxMode.valueChanges.subscribe(() => this.recomputeAll());
     this.customers$.subscribe((cs) => (this.customersCache = cs));
     this.products$.subscribe((ps) => (this.productsCache = ps));
     // Keep the `kindValue` signal in sync with the form and swap the `number`
@@ -400,6 +458,7 @@ export class InvoiceFormComponent {
       hsnSac: ['', [hsnValidator()]],
       quantity: [1, [Validators.required, Validators.min(1)]],
       unitPrice: [0, [Validators.required, Validators.min(0)]],
+      gstPercent: [0, [gstPercentValidator()]], // used only when taxMode === 'item'
       lineTotal: [0]
     });
     this.lineItems.push(g);
@@ -424,8 +483,23 @@ export class InvoiceFormComponent {
     const sub = this.lineItems.controls.reduce((sum, g) => sum + Number(g.get('lineTotal')?.value ?? 0), 0);
     this.subtotal.set(roundMoney(sub));
     this.gstPercentValue.set(Number(this.form.get('gstPercent')?.value ?? 0));
+    // Item mode is only honoured while the tenant entitlement is on.
+    const mode: TaxMode = this.itemWiseEnabled() && this.form.controls.taxMode.value === 'item' ? 'item' : 'bill';
+    this.taxModeValue.set(mode);
+    const tax = computeItemWiseTax(
+      this.lineItems.controls.map((g) => ({
+        lineTotal: Number(g.get('lineTotal')?.value ?? 0),
+        gstPercent: Number(g.get('gstPercent')?.value ?? 0)
+      }))
+    );
+    this.lineTaxes.set(tax.lines.map((l) => roundMoney(l.cgst + l.sgst)));
+    this.itemTax.set({ cgst: tax.cgst, sgst: tax.sgst });
     this.otherChargesValue.set(roundMoney(Number(this.form.get('otherCharges')?.value ?? 0)));
     this.roundOffValue.set(roundMoney(Number(this.form.get('roundOff')?.value ?? 0)));
+  }
+
+  lineTax(index: number): number {
+    return this.lineTaxes()[index] ?? 0;
   }
 
   onCustomerChange(): void {
@@ -459,6 +533,7 @@ export class InvoiceFormComponent {
       const customer = this.customersCache.find((c) => c.id === v.customerId);
       if (!customer) throw new Error('Customer not found.');
 
+      const itemMode = this.taxModeValue() === 'item';
       const lineItems: InvoiceLineItem[] = (v.lineItems as any[]).map((li) => {
         const q = Number(li.quantity);
         const u = Number(li.unitPrice);
@@ -468,7 +543,9 @@ export class InvoiceFormComponent {
           hsnSac: li.hsnSac ? String(li.hsnSac).trim() : null,
           quantity: q,
           unitPrice: u,
-          lineTotal: roundMoney(q * u)
+          lineTotal: roundMoney(q * u),
+          // Only meaningful in item mode; the service recomputes the amounts.
+          gstPercent: itemMode ? Number(li.gstPercent ?? 0) : null
         };
       });
 
@@ -506,7 +583,8 @@ export class InvoiceFormComponent {
         issueDate: new Date(v.issueDate),
         dueDate: new Date(v.dueDate),
         notes: v.notes,
-        gstPercent: Number(v.gstPercent ?? 0),
+        taxMode: itemMode ? 'item' : 'bill',
+        gstPercent: itemMode ? 0 : Number(v.gstPercent ?? 0),
         otherCharges: Number(v.otherCharges ?? 0),
         roundOff: Number(v.roundOff ?? 0)
       });

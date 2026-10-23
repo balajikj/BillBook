@@ -40,7 +40,8 @@ service cloud.firestore {
 
     // Helper: incoming document MUST contain exactly the gate fields.
     function hasOnlyGateFields() {
-      return request.resource.data.keys().hasOnly(['name', 'status', 'defaultCurrency', 'createdAt', 'updatedAt'])
+      return request.resource.data.keys().hasOnly(['name', 'status', 'defaultCurrency', 'features', 'createdAt', 'updatedAt'])
+          && (!('features' in request.resource.data) || request.resource.data.features is map)
           && request.resource.data.name is string
           && request.resource.data.status in ['active', 'inactive']
           && request.resource.data.defaultCurrency is string
@@ -64,8 +65,10 @@ service cloud.firestore {
     // whitelist. Code/id is immutable in Firestore (it's the document path).
     function isAdminGateUpdate(cid) {
       return isTenantAdmin(cid)
-          && request.resource.data.keys().hasOnly(['name', 'status', 'defaultCurrency', 'createdAt', 'updatedAt'])
+          && request.resource.data.keys().hasOnly(['name', 'status', 'defaultCurrency', 'features', 'createdAt', 'updatedAt'])
           && request.resource.data.status == resource.data.status
+          // Feature flags are an entitlement — super-admin only.
+          && request.resource.data.get('features', null) == resource.data.get('features', null)
           && request.resource.data.name is string
           && request.resource.data.name.size() >= 1
           && request.resource.data.name.size() <= 120

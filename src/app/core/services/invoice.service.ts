@@ -4,10 +4,10 @@ import {
   getDoc, getDocs, limit as fsLimit, orderBy, query, runTransaction, serverTimestamp, updateDoc, where
 } from '@angular/fire/firestore';
 import { Observable } from 'rxjs';
-import { Invoice, InvoiceKind, InvoiceLineItem, PurchaseCategory, StoredInvoiceStatus } from '../models/invoice';
+import { Invoice, InvoiceKind, InvoiceLineItem, PurchaseCategory, StoredInvoiceStatus, TaxMode } from '../models/invoice';
 import { CustomerSnapshot } from '../models/customer';
 import { AuthService } from './auth.service';
-import { computeCgstSgst, computeGrandTotal, roundMoney } from '../utils/invoice-math';
+import { computeCgstSgst, computeGrandTotal, computeItemWiseTax, roundMoney } from '../utils/invoice-math';
 
 export interface InvoiceListOptions {
   status?: StoredInvoiceStatus | 'overdue';
@@ -40,6 +40,13 @@ export interface CreateInvoiceArgs {
   issueDate: Date;
   dueDate: Date;
   notes?: string;
+  /**
+   * `bill` (default): one slab (`gstPercent`) on the whole bill.
+   * `item`: each line's `gstPercent` drives its own CGST/SGST; `gstPercent`
+   * below is ignored. The caller must only use `item` when the tenant has the
+   * item-wise-tax feature enabled.
+   */
+  taxMode?: TaxMode;
   // India GST fields. All optional; when `gstPercent > 0`, CGST/SGST are computed and stored.
   gstPercent?: number;
   otherCharges?: number;
@@ -138,11 +145,31 @@ export class InvoiceService {
   async create(args: CreateInvoiceArgs): Promise<{ id: string; number: string }> {
     const cid = this.cid();
     const uid = this.auth.user()!.uid;
+    const taxMode: TaxMode = args.taxMode === 'item' ? 'item' : 'bill';
     const subtotal = roundMoney(args.lineItems.reduce((sum, li) => sum + li.lineTotal, 0));
-    const gstPercent = Number(args.gstPercent ?? 0);
     const otherCharges = roundMoney(Number(args.otherCharges ?? 0));
     const roundOff = roundMoney(Number(args.roundOff ?? 0));
-    const { cgst, sgst } = computeCgstSgst(subtotal, gstPercent);
+    let gstPercent = Number(args.gstPercent ?? 0);
+    let cgst: number;
+    let sgst: number;
+    // Line items as persisted. Item mode recomputes each line's tax here
+    // (never trusting caller-supplied amounts) and strips stale line tax in bill mode.
+    let lineItems: InvoiceLineItem[];
+    if (taxMode === 'item') {
+      const tax = computeItemWiseTax(args.lineItems);
+      lineItems = args.lineItems.map((li, i) => ({
+        ...li,
+        gstPercent: Number(li.gstPercent ?? 0),
+        cgstAmount: tax.lines[i].cgst,
+        sgstAmount: tax.lines[i].sgst
+      }));
+      cgst = tax.cgst;
+      sgst = tax.sgst;
+      gstPercent = tax.maxPercent; // see Invoice.taxMode: keeps `gstPercent > 0` queries working
+    } else {
+      lineItems = args.lineItems.map(({ gstPercent: _g, cgstAmount: _c, sgstAmount: _s, ...rest }) => rest);
+      ({ cgst, sgst } = computeCgstSgst(subtotal, gstPercent));
+    }
     const grandTotal = computeGrandTotal(subtotal, cgst, sgst, otherCharges, roundOff);
     const hasIndiaFields = gstPercent > 0 || otherCharges !== 0 || roundOff !== 0;
     const total = hasIndiaFields ? grandTotal : subtotal;
@@ -186,7 +213,8 @@ export class InvoiceService {
         number,
         kind,
         customer: args.customer,
-        lineItems: args.lineItems,
+        lineItems,
+        taxMode,
         subtotal,
         total,
         currency: args.currency,

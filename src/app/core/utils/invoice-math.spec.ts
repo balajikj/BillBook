@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeCgstSgst, computeGrandTotal, roundMoney } from './invoice-math';
+import { computeCgstSgst, computeGrandTotal, computeItemWiseTax, roundMoney } from './invoice-math';
 
 describe('roundMoney', () => {
   it('rounds 1.005 to 1.01 (half-up)', () => {
@@ -59,5 +59,29 @@ describe('computeGrandTotal', () => {
   });
   it('zero other charges and round off', () => {
     expect(computeGrandTotal(500, 0, 0, 0, 0)).toBe(500);
+  });
+});
+
+describe('computeItemWiseTax', () => {
+  it('taxes each line on its own slab and sums the rounded line amounts', () => {
+    const r = computeItemWiseTax([
+      { lineTotal: 100, gstPercent: 18 },
+      { lineTotal: 200, gstPercent: 5 },
+      { lineTotal: 50, gstPercent: 0 }
+    ]);
+    expect(r.lines).toEqual([{ cgst: 9, sgst: 9 }, { cgst: 5, sgst: 5 }, { cgst: 0, sgst: 0 }]);
+    expect(r.cgst).toBe(14);
+    expect(r.sgst).toBe(14);
+    expect(r.maxPercent).toBe(18);
+  });
+  it('rounds per line so printed lines add up to the printed total', () => {
+    // 33.33 * 5% / 2 = 0.83325 -> 0.83 per line; three lines -> 2.49 (not round(2.49975)=2.5)
+    const r = computeItemWiseTax(Array(3).fill({ lineTotal: 33.33, gstPercent: 5 }));
+    expect(r.cgst).toBe(2.49);
+  });
+  it('treats missing slab as untaxed', () => {
+    const r = computeItemWiseTax([{ lineTotal: 100 }]);
+    expect(r.cgst + r.sgst).toBe(0);
+    expect(r.maxPercent).toBe(0);
   });
 });

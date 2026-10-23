@@ -25,3 +25,36 @@ export function computeGrandTotal(
 ): number {
   return roundMoney(subtotal + cgst + sgst + otherCharges + roundOff);
 }
+
+export interface LineTaxInput {
+  lineTotal: number;
+  gstPercent?: number | null;
+}
+
+export interface ItemWiseTaxResult {
+  /** Per-line CGST/SGST, same order as the input. */
+  lines: Array<{ cgst: number; sgst: number }>;
+  cgst: number;
+  sgst: number;
+  /** Highest slab used on any line (0 when none are taxed). */
+  maxPercent: number;
+}
+
+/**
+ * Item-wise tax: each line is taxed on its own slab, rounded per line, and the
+ * bill-level CGST/SGST are the sums of the rounded line amounts — so the
+ * printed lines always add up to the printed totals.
+ */
+export function computeItemWiseTax(lines: LineTaxInput[]): ItemWiseTaxResult {
+  let cgst = 0;
+  let sgst = 0;
+  let maxPercent = 0;
+  const out = lines.map((l) => {
+    const t = computeCgstSgst(l.lineTotal, l.gstPercent);
+    cgst += t.cgst;
+    sgst += t.sgst;
+    maxPercent = Math.max(maxPercent, Number(l.gstPercent ?? 0) || 0);
+    return t;
+  });
+  return { lines: out, cgst: roundMoney(cgst), sgst: roundMoney(sgst), maxPercent };
+}

@@ -4,7 +4,7 @@ import {
 } from '@angular/fire/firestore';
 import { Observable } from 'rxjs';
 import { AuthService } from './auth.service';
-import { Company, CompanyStatus } from '../models/company';
+import { Company, CompanyFeatures, CompanyStatus } from '../models/company';
 
 function quote(value: string): string {
   if (!/[\s"']/.test(value)) return value;
@@ -56,6 +56,19 @@ export class CompanyService {
       updatedAt: serverTimestamp()
     });
     this.invalidate();
+  }
+
+  /**
+   * Super-admin only: turn a per-tenant feature flag on/off. Written directly
+   * (not via the operator CLI) because the Firestore rules already let a
+   * super-admin update the gate doc; company-admins are blocked from touching
+   * `features` by the same rules.
+   */
+  async setFeature(companyCode: string, feature: keyof CompanyFeatures, enabled: boolean): Promise<void> {
+    await updateDoc(doc(this.db, `companies/${companyCode}`), {
+      [`features.${feature}`]: enabled,
+      updatedAt: serverTimestamp()
+    });
   }
 
   /**

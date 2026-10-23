@@ -79,7 +79,7 @@ import { COMPANY_CODE_PATTERN } from '../../../core/models/role';
 
     <div class="table-scroll">
     <table class="grid">
-      <thead><tr><th>Code</th><th>Name</th><th>Default ccy</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Code</th><th>Name</th><th>Default ccy</th><th>Status</th><th>Item-wise tax</th><th>Created</th><th>Actions</th></tr></thead>
       <tbody>
         @for (c of (companies$ | async) ?? []; track c.id) {
           <tr>
@@ -88,6 +88,14 @@ import { COMPANY_CODE_PATTERN } from '../../../core/models/role';
             <td>{{ c.defaultCurrency }}</td>
             <td>
               <span class="badge" [class.inactive]="c.status !== 'active'">{{ c.status }}</span>
+            </td>
+            <td>
+              <label class="switch">
+                <input type="checkbox" [checked]="!!c.features?.itemWiseTax"
+                       [disabled]="featureBusy() === c.id"
+                       (change)="setItemWiseTax(c.id, $any($event.target))" />
+                {{ c.features?.itemWiseTax ? 'On' : 'Off' }}
+              </label>
             </td>
             <td>{{ c.createdAt?.toDate() | date:'mediumDate' }}</td>
             <td>
@@ -98,11 +106,13 @@ import { COMPANY_CODE_PATTERN } from '../../../core/models/role';
             </td>
           </tr>
         } @empty {
-          <tr><td colspan="6" class="muted">No companies yet.</td></tr>
+          <tr><td colspan="7" class="muted">No companies yet.</td></tr>
         }
       </tbody>
     </table>
     </div>
+
+    @if (featureError(); as fe) { <p class="field-error">{{ fe }}</p> }
 
     @if (statusCommand(); as sc) {
       <div class="card command-block">
@@ -162,6 +172,8 @@ import { COMPANY_CODE_PATTERN } from '../../../core/models/role';
     legend { font-size: 13px; padding: 0 6px; }
     button { padding: 6px 12px; background: #1e6fff; color: white; border: 0; border-radius: 4px; cursor: pointer; margin: 4px 4px 4px 0; }
     button[disabled] { opacity: 0.6; cursor: not-allowed; }
+    .switch { display: inline-flex; align-items: center; gap: 6px; margin: 0; cursor: pointer; }
+    .switch input { display: inline-block; width: auto; margin: 0; }
     .muted { color: #888; }
     .small { font-size: 12px; }
     .ok { color: #1e6f1e; margin: 4px 0; }
@@ -192,6 +204,9 @@ export class CompaniesComponent {
     adminEmail: ['', [Validators.required, Validators.email]],
     adminDisplayName: ['', [Validators.required]]
   });
+
+  readonly featureBusy = signal<string | null>(null);
+  readonly featureError = signal<string | null>(null);
 
   readonly statusCommand = signal<{ code: string; action: string; command: string } | null>(null);
   readonly statusCopied = signal(false);
@@ -233,6 +248,21 @@ export class CompaniesComponent {
     const command = this.companies.generateSetStatusCommand(code, next);
     this.statusCommand.set({ code, action: next === 'active' ? 'activate' : 'deactivate', command });
     this.statusCopied.set(false);
+  }
+
+  /** Item-wise tax is an entitlement: only the super-admin can flip it, and it writes straight to the gate doc. */
+  async setItemWiseTax(code: string, input: HTMLInputElement): Promise<void> {
+    const enabled = input.checked;
+    this.featureBusy.set(code);
+    this.featureError.set(null);
+    try {
+      await this.companies.setFeature(code, 'itemWiseTax', enabled);
+    } catch (e: any) {
+      input.checked = !enabled; // revert the optimistic toggle
+      this.featureError.set(`Could not update ${code}: ${e?.message ?? 'failed'}`);
+    } finally {
+      this.featureBusy.set(null);
+    }
   }
 
   addAdmin(code: string): void {

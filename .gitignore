@@ -7,7 +7,7 @@
 /bazel-out
 
 # Node
-/node_modules
+node_modules/
 npm-debug.log
 yarn-error.log
 
@@ -57,3 +57,10 @@ ui-debug.log
 # Legacy one-off bootstrap script (superseded by admin-ops.mjs bootstrap-super-admin)
 # See docs/bootstrap-super-admin.md.
 bootstrap-super-admin.mjs
+
+# Compiled Cloud Functions output
+functions/lib/
+
+# Local emulator data exports
+firebase-export-*/
+emulator-data/
